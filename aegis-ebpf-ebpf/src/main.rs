@@ -42,7 +42,8 @@ fn emit_memory_event(ctx: &TracePointContext, syscall: MemorySyscall) -> u32 {
     let comm = bpf_get_current_comm().unwrap_or([0; TASK_COMM_LEN]);
 
     let event = MemoryEvent {
-        timestamp_ns: bpf_ktime_get_ns(),
+        // SAFETY: helper reads kernel monotonic time and has no pointer inputs.
+        timestamp_ns: unsafe { bpf_ktime_get_ns() },
         pid: pid_tgid as u32,
         tgid: (pid_tgid >> 32) as u32,
         syscall: syscall as u32,
@@ -50,7 +51,7 @@ fn emit_memory_event(ctx: &TracePointContext, syscall: MemorySyscall) -> u32 {
         comm,
     };
 
-    if let Err(err) = EVENTS.output(&event, 0) {
+    if let Err(err) = EVENTS.output::<MemoryEvent>(event, 0) {
         warn!(ctx, "ring buffer output failed: {}", err);
     }
 
