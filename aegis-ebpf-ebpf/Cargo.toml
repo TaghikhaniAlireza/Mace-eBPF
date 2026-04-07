@@ -1,0 +1,17 @@
+[package]
+name = "aegis-ebpf-ebpf"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+aegis-ebpf-common = { path = "../aegis-ebpf-common" }
+
+aya-ebpf = { workspace = true }
+aya-log-ebpf = { workspace = true }
+
+[build-dependencies]
+which = { workspace = true }
+
+[[bin]]
+name = "aegis-ebpf"
+path = "src/main.rs"
