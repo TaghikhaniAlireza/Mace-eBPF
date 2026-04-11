@@ -55,6 +55,10 @@ async fn main() -> anyhow::Result<()> {
         "sys_enter_memfd_create",
     )?;
     attach_syscall_tracepoint(&mut ebpf, "sys_enter_ptrace", "sys_enter_ptrace")?;
+    attach_syscall_tracepoint(&mut ebpf, "sys_exit_mmap", "sys_exit_mmap")?;
+    attach_syscall_tracepoint(&mut ebpf, "sys_exit_mprotect", "sys_exit_mprotect")?;
+    attach_syscall_tracepoint(&mut ebpf, "sys_exit_memfd_create", "sys_exit_memfd_create")?;
+    attach_syscall_tracepoint(&mut ebpf, "sys_exit_ptrace", "sys_exit_ptrace")?;
 
     let ring_buf = RingBuf::try_from(
         ebpf.take_map("EVENTS")
