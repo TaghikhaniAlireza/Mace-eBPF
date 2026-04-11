@@ -134,41 +134,89 @@ fn emit_pending_event_on_success(ctx: &TracePointContext, syscall: MemorySyscall
 
 #[tracepoint]
 pub fn sys_enter_mmap(ctx: TracePointContext) -> u32 {
+    // Force map retention - prevent LLVM dead code elimination.
+    unsafe {
+        let _ = BLOCKLIST.get(&0u32);
+        let _ = RATE_LIMIT_LAST_TS.get(&0u32);
+        let _ = RATE_LIMITED_COUNT.get_ptr(0);
+    }
     store_pending_event(&ctx, MemorySyscall::Mmap)
 }
 
 #[tracepoint]
 pub fn sys_enter_mprotect(ctx: TracePointContext) -> u32 {
+    // Force map retention - prevent LLVM dead code elimination.
+    unsafe {
+        let _ = BLOCKLIST.get(&0u32);
+        let _ = RATE_LIMIT_LAST_TS.get(&0u32);
+        let _ = RATE_LIMITED_COUNT.get_ptr(0);
+    }
     store_pending_event(&ctx, MemorySyscall::Mprotect)
 }
 
 #[tracepoint]
 pub fn sys_enter_memfd_create(ctx: TracePointContext) -> u32 {
+    // Force map retention - prevent LLVM dead code elimination.
+    unsafe {
+        let _ = BLOCKLIST.get(&0u32);
+        let _ = RATE_LIMIT_LAST_TS.get(&0u32);
+        let _ = RATE_LIMITED_COUNT.get_ptr(0);
+    }
     store_pending_event(&ctx, MemorySyscall::MemfdCreate)
 }
 
 #[tracepoint]
 pub fn sys_enter_ptrace(ctx: TracePointContext) -> u32 {
+    // Force map retention - prevent LLVM dead code elimination.
+    unsafe {
+        let _ = BLOCKLIST.get(&0u32);
+        let _ = RATE_LIMIT_LAST_TS.get(&0u32);
+        let _ = RATE_LIMITED_COUNT.get_ptr(0);
+    }
     store_pending_event(&ctx, MemorySyscall::Ptrace)
 }
 
 #[tracepoint]
 pub fn sys_exit_mmap(ctx: TracePointContext) -> u32 {
+    // Force map retention - prevent LLVM dead code elimination.
+    unsafe {
+        let _ = BLOCKLIST.get(&0u32);
+        let _ = RATE_LIMIT_LAST_TS.get(&0u32);
+        let _ = RATE_LIMITED_COUNT.get_ptr(0);
+    }
     emit_pending_event_on_success(&ctx, MemorySyscall::Mmap)
 }
 
 #[tracepoint]
 pub fn sys_exit_mprotect(ctx: TracePointContext) -> u32 {
+    // Force map retention - prevent LLVM dead code elimination.
+    unsafe {
+        let _ = BLOCKLIST.get(&0u32);
+        let _ = RATE_LIMIT_LAST_TS.get(&0u32);
+        let _ = RATE_LIMITED_COUNT.get_ptr(0);
+    }
     emit_pending_event_on_success(&ctx, MemorySyscall::Mprotect)
 }
 
 #[tracepoint]
 pub fn sys_exit_memfd_create(ctx: TracePointContext) -> u32 {
+    // Force map retention - prevent LLVM dead code elimination.
+    unsafe {
+        let _ = BLOCKLIST.get(&0u32);
+        let _ = RATE_LIMIT_LAST_TS.get(&0u32);
+        let _ = RATE_LIMITED_COUNT.get_ptr(0);
+    }
     emit_pending_event_on_success(&ctx, MemorySyscall::MemfdCreate)
 }
 
 #[tracepoint]
 pub fn sys_exit_ptrace(ctx: TracePointContext) -> u32 {
+    // Force map retention - prevent LLVM dead code elimination.
+    unsafe {
+        let _ = BLOCKLIST.get(&0u32);
+        let _ = RATE_LIMIT_LAST_TS.get(&0u32);
+        let _ = RATE_LIMITED_COUNT.get_ptr(0);
+    }
     emit_pending_event_on_success(&ctx, MemorySyscall::Ptrace)
 }
 
