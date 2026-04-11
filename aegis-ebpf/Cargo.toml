@@ -8,7 +8,7 @@ license.workspace = true
 [dependencies]
 aegis-ebpf-common = { path = "../aegis-ebpf-common", features = ["user"] }
 
-anyhow = { workspace = true, default-features = true }
+anyhow = "1"
 aya = { workspace = true }
 aya-log = { workspace = true }
 env_logger = { workspace = true }
@@ -16,13 +16,7 @@ libc = { workspace = true }
 log = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 tempfile = "3"
-tokio = { workspace = true, features = [
-    "macros",
-    "rt",
-    "rt-multi-thread",
-    "net",
-    "signal",
-] }
+tokio = { version = "1", features = ["full"] }
 [build-dependencies]
 anyhow = { workspace = true }
 aya-build = { workspace = true }
@@ -40,6 +34,10 @@ cargo_metadata = { workspace = true }
 # workflows with stable cargo; stable cargo outright refuses to load manifests that use unstable
 # features.
 aegis-ebpf-ebpf = { path = "../aegis-ebpf-ebpf" }
+
+[lib]
+name = "aegis_ebpf"
+path = "src/lib.rs"
 
 [[bin]]
 name = "aegis-ebpf"
