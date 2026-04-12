@@ -38,6 +38,11 @@ static RATE_LIMITED_COUNT: LruHashMap<u32, u64> =
     LruHashMap::with_max_entries(RATE_LIMIT_MAX_ENTRIES, 0);
 
 #[inline(always)]
+fn should_rate_limit(syscall: MemorySyscall) -> bool {
+    matches!(syscall, MemorySyscall::Mmap | MemorySyscall::Mprotect)
+}
+
+#[inline(always)]
 fn read_syscall_args(ctx: &TracePointContext) -> [u64; SYSCALL_ARG_COUNT] {
     [
         unsafe { ctx.read_at::<u64>(16).unwrap_or(0) },
@@ -59,16 +64,18 @@ fn store_pending_event(ctx: &TracePointContext, syscall: MemorySyscall) -> u32 {
     }
 
     let now_ns = unsafe { bpf_ktime_get_ns() };
-    let last_ts = unsafe { RATE_LIMIT_LAST_TS.get(&tgid).copied().unwrap_or(0) };
+    if should_rate_limit(syscall) {
+        let last_ts = unsafe { RATE_LIMIT_LAST_TS.get(&tgid).copied().unwrap_or(0) };
 
-    if now_ns.saturating_sub(last_ts) < RATE_LIMIT_INTERVAL_NS {
-        let prev = unsafe { RATE_LIMITED_COUNT.get(&tgid).copied().unwrap_or(0) };
-        let next = prev.saturating_add(1);
-        let _ = RATE_LIMITED_COUNT.insert(&tgid, &next, 0);
-        return 0;
+        if now_ns.saturating_sub(last_ts) < RATE_LIMIT_INTERVAL_NS {
+            let prev = unsafe { RATE_LIMITED_COUNT.get(&tgid).copied().unwrap_or(0) };
+            let next = prev.saturating_add(1);
+            let _ = RATE_LIMITED_COUNT.insert(&tgid, &next, 0);
+            return 0;
+        }
+
+        let _ = RATE_LIMIT_LAST_TS.insert(&tgid, &now_ns, 0);
     }
-
-    let _ = RATE_LIMIT_LAST_TS.insert(&tgid, &now_ns, 0);
 
     let comm = bpf_get_current_comm().unwrap_or([0; TASK_COMM_LEN]);
     let event = MemoryEvent {
@@ -93,7 +100,7 @@ fn emit_pending_event_on_success(ctx: &TracePointContext, syscall: MemorySyscall
     let pid_tgid = bpf_get_current_pid_tgid();
     let ret = unsafe { ctx.read_at::<i64>(16).unwrap_or(-1) };
     let event = unsafe { pending_syscalls.get(&pid_tgid).copied() };
-    let Some(event) = event else { return 0 };
+    let Some(mut event) = event else { return 0 };
 
     if ret < 0 {
         let _ = pending_syscalls.remove(&pid_tgid);
@@ -105,6 +112,7 @@ fn emit_pending_event_on_success(ctx: &TracePointContext, syscall: MemorySyscall
         return 0;
     }
 
+    event.syscall = syscall as u32;
     if let Some(mut entry) = EVENTS.reserve::<MemoryEvent>(0) {
         entry.write(event);
         entry.submit(0);

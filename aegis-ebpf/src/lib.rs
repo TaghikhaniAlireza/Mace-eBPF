@@ -35,19 +35,21 @@ pub async fn start_sensor(config: SensorConfig) -> anyhow::Result<mpsc::Receiver
 
     let mut ebpf = load_ebpf().await?;
     init_ebpf_logger(&mut ebpf);
-
-    attach_syscall_tracepoint(&mut ebpf, "sys_enter_mmap", "sys_enter_mmap")?;
-    attach_syscall_tracepoint(&mut ebpf, "sys_enter_mprotect", "sys_enter_mprotect")?;
-    attach_syscall_tracepoint(
-        &mut ebpf,
-        "sys_enter_memfd_create",
-        "sys_enter_memfd_create",
-    )?;
-    attach_syscall_tracepoint(&mut ebpf, "sys_enter_ptrace", "sys_enter_ptrace")?;
-    attach_syscall_tracepoint(&mut ebpf, "sys_exit_mmap", "sys_exit_mmap")?;
-    attach_syscall_tracepoint(&mut ebpf, "sys_exit_mprotect", "sys_exit_mprotect")?;
-    attach_syscall_tracepoint(&mut ebpf, "sys_exit_memfd_create", "sys_exit_memfd_create")?;
-    attach_syscall_tracepoint(&mut ebpf, "sys_exit_ptrace", "sys_exit_ptrace")?;
+    let syscall_tracepoints = [
+        ("sys_enter_mmap", "sys_enter_mmap"),
+        ("sys_enter_mprotect", "sys_enter_mprotect"),
+        ("sys_enter_memfd_create", "sys_enter_memfd_create"),
+        ("sys_enter_ptrace", "sys_enter_ptrace"),
+        ("sys_exit_mmap", "sys_exit_mmap"),
+        ("sys_exit_mprotect", "sys_exit_mprotect"),
+        ("sys_exit_memfd_create", "sys_exit_memfd_create"),
+        ("sys_exit_ptrace", "sys_exit_ptrace"),
+    ];
+    for (program_name, tracepoint_name) in syscall_tracepoints {
+        attach_syscall_tracepoint(&mut ebpf, program_name, tracepoint_name).with_context(|| {
+            format!("failed to attach {program_name} to syscalls/{tracepoint_name}")
+        })?;
+    }
 
     populate_allowlist(&mut ebpf, &config.allowlist_pids)?;
 
