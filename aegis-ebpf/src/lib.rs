@@ -6,6 +6,9 @@ use std::{
     time::Duration,
 };
 
+pub mod enrichment;
+pub use enrichment::{ContextEnricher, NoopEnricher, PodMetadata};
+
 use aegis_ebpf_common::MemoryEvent;
 use anyhow::Context as _;
 use aya::{

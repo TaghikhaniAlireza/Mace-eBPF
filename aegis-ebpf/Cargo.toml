@@ -9,6 +9,7 @@ license.workspace = true
 aegis-ebpf-common = { path = "../aegis-ebpf-common", features = ["user"] }
 
 anyhow = "1"
+async-trait = "0.1.89"
 aya = { workspace = true }
 aya-log = { workspace = true }
 env_logger = { workspace = true }
