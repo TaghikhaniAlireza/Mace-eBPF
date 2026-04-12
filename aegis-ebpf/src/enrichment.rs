@@ -1,5 +1,10 @@
 use async_trait::async_trait;
 
+#[cfg(feature = "kubernetes")]
+pub mod kubernetes;
+#[cfg(feature = "kubernetes")]
+pub use kubernetes::KubernetesEnricher;
+
 pub struct PodMetadata {
     pub pod_name: String,
     pub namespace: String,
