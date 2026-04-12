@@ -1,4 +1,9 @@
-use std::sync::Arc;
+use std::{
+    cmp::{Ordering, Reverse},
+    collections::BinaryHeap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use aegis_ebpf_common::MemoryEvent;
 use log::warn;
@@ -8,14 +13,36 @@ use crate::{ContextEnricher, PodMetadata, SensorConfig, start_sensor};
 
 pub mod config;
 
+const HEAP_CAPACITY_LIMIT: usize = 1024;
+
 #[derive(Clone, Debug)]
 pub struct EnrichedEvent {
     pub inner: MemoryEvent,
     pub metadata: Option<PodMetadata>,
 }
 
+impl Ord for EnrichedEvent {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.inner.timestamp_ns.cmp(&other.inner.timestamp_ns)
+    }
+}
+
+impl PartialOrd for EnrichedEvent {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for EnrichedEvent {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner.timestamp_ns == other.inner.timestamp_ns
+    }
+}
+
+impl Eq for EnrichedEvent {}
+
 pub struct PipelineHandle {
-    rx: mpsc::Receiver<EnrichedEvent>,
+    ordered_rx: mpsc::Receiver<EnrichedEvent>,
     shutdown_tx: oneshot::Sender<()>,
 }
 
@@ -27,22 +54,30 @@ pub async fn start_pipeline(
     let raw_rx = start_sensor(sensor_config).await?;
     Ok(spawn_pipeline_from_raw(
         raw_rx,
-        pipeline_config.channel_buffer_size,
+        pipeline_config,
         enricher,
     ))
 }
 
 fn spawn_pipeline_from_raw(
     raw_rx: mpsc::Receiver<MemoryEvent>,
-    channel_buffer_size: usize,
+    pipeline_config: config::PipelineConfig,
     enricher: Arc<dyn ContextEnricher>,
 ) -> PipelineHandle {
-    let (enriched_tx, enriched_rx) = mpsc::channel(channel_buffer_size.max(1));
+    let channel_buffer_size = pipeline_config.channel_buffer_size.max(1);
+    let (enriched_tx, enriched_rx) = mpsc::channel(channel_buffer_size);
+    let (ordered_tx, ordered_rx) = mpsc::channel(channel_buffer_size);
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     tokio::spawn(run_enrichment_worker(raw_rx, enriched_tx, enricher, shutdown_rx));
+    tokio::spawn(run_reorder_task(
+        enriched_rx,
+        ordered_tx,
+        pipeline_config.reorder_window_ms,
+        pipeline_config.reorder_heap_capacity.max(1),
+    ));
 
     PipelineHandle {
-        rx: enriched_rx,
+        ordered_rx,
         shutdown_tx,
     }
 }
@@ -108,9 +143,82 @@ async fn send_enriched_event(
     enriched_tx.send(enriched).await.map_err(|_| ())
 }
 
+async fn run_reorder_task(
+    mut enriched_rx: mpsc::Receiver<EnrichedEvent>,
+    ordered_tx: mpsc::Sender<EnrichedEvent>,
+    reorder_window_ms: u64,
+    reorder_heap_capacity: usize,
+) {
+    let mut heap: BinaryHeap<Reverse<EnrichedEvent>> = BinaryHeap::new();
+    let mut deadline: Option<Instant> = None;
+    let effective_capacity = reorder_heap_capacity.min(HEAP_CAPACITY_LIMIT).max(1);
+
+    loop {
+        if let Some(deadline_at) = deadline {
+            let sleep = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline_at));
+            tokio::pin!(sleep);
+
+            tokio::select! {
+                maybe_event = enriched_rx.recv() => {
+                    match maybe_event {
+                        Some(event) => {
+                            heap.push(Reverse(event));
+                            if heap.len() >= effective_capacity {
+                                if flush_heap(&mut heap, &ordered_tx).await.is_err() {
+                                    return;
+                                }
+                                deadline = None;
+                            }
+                        }
+                        None => {
+                            let _ = flush_heap(&mut heap, &ordered_tx).await;
+                            return;
+                        }
+                    }
+                }
+                _ = &mut sleep => {
+                    if flush_heap(&mut heap, &ordered_tx).await.is_err() {
+                        return;
+                    }
+                    deadline = None;
+                }
+            }
+        } else {
+            match enriched_rx.recv().await {
+                Some(event) => {
+                    heap.push(Reverse(event));
+                    deadline = Some(Instant::now() + Duration::from_millis(reorder_window_ms));
+                    if heap.len() >= effective_capacity {
+                        if flush_heap(&mut heap, &ordered_tx).await.is_err() {
+                            return;
+                        }
+                        deadline = None;
+                    }
+                }
+                None => {
+                    let _ = flush_heap(&mut heap, &ordered_tx).await;
+                    return;
+                }
+            }
+        }
+    }
+}
+
+async fn flush_heap(
+    heap: &mut BinaryHeap<Reverse<EnrichedEvent>>,
+    ordered_tx: &mpsc::Sender<EnrichedEvent>,
+) -> Result<(), ()> {
+    while let Some(Reverse(event)) = heap.pop() {
+        if ordered_tx.send(event).await.is_err() {
+            return Err(());
+        }
+    }
+    Ok(())
+}
+
 impl PipelineHandle {
     pub async fn next_event(&mut self) -> Option<EnrichedEvent> {
-        self.rx.recv().await
+        self.ordered_rx.recv().await
     }
 
     pub async fn shutdown(self) {
@@ -148,8 +256,7 @@ mod tests {
         enricher: Arc<dyn ContextEnricher>,
     ) -> (mpsc::Sender<MemoryEvent>, PipelineHandle) {
         let (raw_tx, raw_rx) = mpsc::channel(128);
-        let handle =
-            spawn_pipeline_from_raw(raw_rx, config::PipelineConfig::default().channel_buffer_size, enricher);
+        let handle = spawn_pipeline_from_raw(raw_rx, config::PipelineConfig::default(), enricher);
         (raw_tx, handle)
     }
 
@@ -233,9 +340,9 @@ mod tests {
                 .expect("send should succeed");
         }
 
-        // Extract the receiver so we can continue draining after shutdown consumes the handle.
+        // Extract the ordered receiver so we can continue draining after shutdown consumes the handle.
         let (_dummy_tx, dummy_rx) = mpsc::channel(1);
-        let mut rx = std::mem::replace(&mut handle.rx, dummy_rx);
+        let mut rx = std::mem::replace(&mut handle.ordered_rx, dummy_rx);
         handle.shutdown().await;
 
         let mut count = 0usize;
@@ -244,5 +351,94 @@ mod tests {
         }
 
         assert_eq!(count, 50);
+    }
+
+    #[tokio::test]
+    async fn reorder_in_order_passthrough() {
+        let (raw_tx, mut handle) = spawn_test_pipeline(Arc::new(NoopEnricher));
+        for ts in [100, 200, 300, 400, 500] {
+            raw_tx
+                .send(fake_event(ts, ts as u32, ts as u32))
+                .await
+                .expect("send should succeed");
+        }
+
+        tokio::time::sleep(Duration::from_millis(config::PipelineConfig::default().reorder_window_ms + 10)).await;
+
+        let mut out = Vec::new();
+        for _ in 0..5 {
+            let event = handle.next_event().await.expect("event should arrive");
+            out.push(event.inner.timestamp_ns);
+        }
+        assert_eq!(out, vec![100, 200, 300, 400, 500]);
+    }
+
+    #[tokio::test]
+    async fn reorder_out_of_order_events() {
+        let (raw_tx, mut handle) = spawn_test_pipeline(Arc::new(NoopEnricher));
+        for ts in [300, 100, 500, 200, 400] {
+            raw_tx
+                .send(fake_event(ts, ts as u32, ts as u32))
+                .await
+                .expect("send should succeed");
+        }
+
+        tokio::time::sleep(Duration::from_millis(config::PipelineConfig::default().reorder_window_ms + 10)).await;
+
+        let mut out = Vec::new();
+        for _ in 0..5 {
+            let event = handle.next_event().await.expect("event should arrive");
+            out.push(event.inner.timestamp_ns);
+        }
+        assert_eq!(out, vec![100, 200, 300, 400, 500]);
+    }
+
+    #[tokio::test]
+    async fn reorder_capacity_flush_without_timer() {
+        let (raw_tx, raw_rx) = mpsc::channel(128);
+        let config = config::PipelineConfig {
+            reorder_heap_capacity: 4,
+            ..config::PipelineConfig::default()
+        };
+        let mut handle = spawn_pipeline_from_raw(raw_rx, config, Arc::new(NoopEnricher));
+
+        for ts in [40, 10, 30, 20] {
+            raw_tx
+                .send(fake_event(ts, ts as u32, ts as u32))
+                .await
+                .expect("send should succeed");
+        }
+
+        let mut out = Vec::new();
+        for _ in 0..4 {
+            let event = handle.next_event().await.expect("event should arrive");
+            out.push(event.inner.timestamp_ns);
+        }
+        assert_eq!(out, vec![10, 20, 30, 40]);
+    }
+
+    #[tokio::test]
+    async fn reorder_shutdown_flushes_remaining_events() {
+        let (raw_tx, mut handle) = spawn_test_pipeline(Arc::new(NoopEnricher));
+        for ts in [30, 10, 20] {
+            raw_tx
+                .send(fake_event(ts, ts as u32, ts as u32))
+                .await
+                .expect("send should succeed");
+        }
+
+        let (_dummy_tx, dummy_rx) = mpsc::channel(1);
+        let mut rx = std::mem::replace(&mut handle.ordered_rx, dummy_rx);
+        handle.shutdown().await;
+
+        let mut out = Vec::new();
+        while let Ok(Some(event)) = tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+            out.push(event.inner.timestamp_ns);
+            if out.len() == 3 {
+                break;
+            }
+        }
+
+        assert_eq!(out, vec![10, 20, 30]);
     }
 }
