@@ -8,9 +8,10 @@ use std::{
 
 pub mod enrichment;
 pub mod pipeline;
+pub mod rules;
 pub use enrichment::{ContextEnricher, NoopEnricher, PodMetadata};
 pub use pipeline::config::PipelineConfig;
-pub use pipeline::{EnrichedEvent, PipelineHandle, start_pipeline};
+pub use pipeline::{EnrichedEvent, PipelineError, PipelineHandle, start_pipeline};
 
 use aegis_ebpf_common::MemoryEvent;
 use anyhow::Context as _;

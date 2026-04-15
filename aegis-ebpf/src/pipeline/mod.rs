@@ -1,6 +1,8 @@
 use std::{
     cmp::{Ordering, Reverse},
     collections::BinaryHeap,
+    error::Error,
+    fmt,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -8,8 +10,12 @@ use std::{
 use aegis_ebpf_common::MemoryEvent;
 use log::warn;
 use tokio::sync::{mpsc, oneshot};
+use tracing::warn as tracing_warn;
 
-use crate::{start_sensor, ContextEnricher, PodMetadata, SensorConfig};
+use crate::{
+    rules::{RuleError, loader::RuleSet},
+    start_sensor, ContextEnricher, PodMetadata, SensorConfig,
+};
 
 pub mod config;
 
@@ -46,21 +52,64 @@ pub struct PipelineHandle {
     shutdown_tx: oneshot::Sender<()>,
 }
 
+#[derive(Debug)]
+pub enum PipelineError {
+    SensorStartFailed(anyhow::Error),
+    RuleLoadFailed(RuleError),
+}
+
+impl fmt::Display for PipelineError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SensorStartFailed(err) => write!(f, "failed to start sensor: {err}"),
+            Self::RuleLoadFailed(err) => write!(f, "failed to load rules: {err}"),
+        }
+    }
+}
+
+impl Error for PipelineError {}
+
+fn load_rules(config: &config::PipelineConfig) -> Result<Arc<RuleSet>, PipelineError> {
+    if let Some(path) = &config.rules_path {
+        let loaded = RuleSet::from_file(path).map_err(PipelineError::RuleLoadFailed)?;
+        return Ok(Arc::new(loaded));
+    }
+    Ok(Arc::new(RuleSet::default()))
+}
+
 pub async fn start_pipeline(
     sensor_config: SensorConfig,
     pipeline_config: config::PipelineConfig,
     enricher: Arc<dyn ContextEnricher>,
-) -> anyhow::Result<PipelineHandle> {
+) -> Result<PipelineHandle, PipelineError> {
     assert!(
         pipeline_config.partition_count.is_power_of_two(),
         "partition_count must be a power of 2"
     );
 
-    let raw_rx = start_sensor(sensor_config).await?;
+    let rules = load_rules(&pipeline_config)?;
+    let raw_rx = start_sensor(sensor_config)
+        .await
+        .map_err(PipelineError::SensorStartFailed)?;
     Ok(spawn_pipeline_from_raw(
         raw_rx,
         pipeline_config,
         enricher,
+        rules,
+    ))
+}
+
+pub(crate) fn start_pipeline_from_receiver_for_tests(
+    raw_rx: mpsc::Receiver<MemoryEvent>,
+    pipeline_config: config::PipelineConfig,
+    enricher: Arc<dyn ContextEnricher>,
+) -> Result<PipelineHandle, PipelineError> {
+    let rules = load_rules(&pipeline_config)?;
+    Ok(spawn_pipeline_from_raw(
+        raw_rx,
+        pipeline_config,
+        enricher,
+        rules,
     ))
 }
 
@@ -68,6 +117,7 @@ fn spawn_pipeline_from_raw(
     raw_rx: mpsc::Receiver<MemoryEvent>,
     pipeline_config: config::PipelineConfig,
     enricher: Arc<dyn ContextEnricher>,
+    rules: Arc<RuleSet>,
 ) -> PipelineHandle {
     assert!(
         pipeline_config.partition_count.is_power_of_two(),
@@ -92,6 +142,7 @@ fn spawn_pipeline_from_raw(
         final_tx,
         pipeline_config.partition_count,
         channel_buffer_size,
+        rules,
     ));
 
     PipelineHandle {
@@ -241,8 +292,18 @@ fn route_partition_index(tgid: u32, partition_count: usize) -> usize {
 async fn run_partition_worker(
     mut rx: mpsc::Receiver<EnrichedEvent>,
     merge_tx: mpsc::Sender<EnrichedEvent>,
+    rules: Arc<RuleSet>,
 ) {
     while let Some(event) = rx.recv().await {
+        let matches = rules.evaluate(&event);
+        if !matches.is_empty() {
+            let rule_ids: Vec<&str> = matches.iter().map(|rule| rule.id.as_str()).collect();
+            tracing_warn!(
+                tgid = event.inner.tgid,
+                rules = ?rule_ids,
+                "Rule match detected"
+            );
+        }
         if merge_tx.send(event).await.is_err() {
             return;
         }
@@ -254,6 +315,7 @@ async fn run_partition_router(
     final_tx: mpsc::Sender<EnrichedEvent>,
     partition_count: usize,
     partition_buffer_size: usize,
+    rules: Arc<RuleSet>,
 ) {
     let mut partition_txs = Vec::with_capacity(partition_count);
     let mut worker_handles = Vec::with_capacity(partition_count);
@@ -264,6 +326,7 @@ async fn run_partition_router(
         worker_handles.push(tokio::spawn(run_partition_worker(
             partition_rx,
             final_tx.clone(),
+            Arc::clone(&rules),
         )));
     }
     drop(final_tx);
@@ -299,7 +362,10 @@ mod tests {
     use async_trait::async_trait;
     use tokio::sync::mpsc;
 
-    use super::{config, route_partition_index, spawn_pipeline_from_raw, EnrichedEvent, PipelineHandle};
+    use super::{
+        config, route_partition_index, start_pipeline_from_receiver_for_tests, EnrichedEvent,
+        PipelineHandle,
+    };
     use crate::{ContextEnricher, NoopEnricher, PodMetadata};
 
     fn fake_event(timestamp_ns: u64, tgid: u32, pid: u32) -> MemoryEvent {
@@ -320,7 +386,12 @@ mod tests {
         enricher: Arc<dyn ContextEnricher>,
     ) -> (mpsc::Sender<MemoryEvent>, PipelineHandle) {
         let (raw_tx, raw_rx) = mpsc::channel(128);
-        let handle = spawn_pipeline_from_raw(raw_rx, config::PipelineConfig::default(), enricher);
+        let handle = start_pipeline_from_receiver_for_tests(
+            raw_rx,
+            config::PipelineConfig::default(),
+            enricher,
+        )
+        .expect("test pipeline should start");
         (raw_tx, handle)
     }
 
@@ -329,7 +400,8 @@ mod tests {
         cfg: config::PipelineConfig,
     ) -> (mpsc::Sender<MemoryEvent>, PipelineHandle) {
         let (raw_tx, raw_rx) = mpsc::channel(128);
-        let handle = spawn_pipeline_from_raw(raw_rx, cfg, enricher);
+        let handle = start_pipeline_from_receiver_for_tests(raw_rx, cfg, enricher)
+            .expect("test pipeline should start");
         (raw_tx, handle)
     }
 
