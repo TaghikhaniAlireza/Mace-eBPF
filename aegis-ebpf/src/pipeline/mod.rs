@@ -9,7 +9,7 @@ use aegis_ebpf_common::MemoryEvent;
 use log::warn;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::{ContextEnricher, PodMetadata, SensorConfig, start_sensor};
+use crate::{start_sensor, ContextEnricher, PodMetadata, SensorConfig};
 
 pub mod config;
 
@@ -51,6 +51,11 @@ pub async fn start_pipeline(
     pipeline_config: config::PipelineConfig,
     enricher: Arc<dyn ContextEnricher>,
 ) -> anyhow::Result<PipelineHandle> {
+    assert!(
+        pipeline_config.partition_count.is_power_of_two(),
+        "partition_count must be a power of 2"
+    );
+
     let raw_rx = start_sensor(sensor_config).await?;
     Ok(spawn_pipeline_from_raw(
         raw_rx,
@@ -64,10 +69,17 @@ fn spawn_pipeline_from_raw(
     pipeline_config: config::PipelineConfig,
     enricher: Arc<dyn ContextEnricher>,
 ) -> PipelineHandle {
+    assert!(
+        pipeline_config.partition_count.is_power_of_two(),
+        "partition_count must be a power of 2"
+    );
+
     let channel_buffer_size = pipeline_config.channel_buffer_size.max(1);
     let (enriched_tx, enriched_rx) = mpsc::channel(channel_buffer_size);
     let (ordered_tx, ordered_rx) = mpsc::channel(channel_buffer_size);
+    let (final_tx, final_rx) = mpsc::channel(channel_buffer_size);
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
+
     tokio::spawn(run_enrichment_worker(raw_rx, enriched_tx, enricher, shutdown_rx));
     tokio::spawn(run_reorder_task(
         enriched_rx,
@@ -75,9 +87,15 @@ fn spawn_pipeline_from_raw(
         pipeline_config.reorder_window_ms,
         pipeline_config.reorder_heap_capacity.max(1),
     ));
+    tokio::spawn(run_partition_router(
+        ordered_rx,
+        final_tx,
+        pipeline_config.partition_count,
+        channel_buffer_size,
+    ));
 
     PipelineHandle {
-        ordered_rx,
+        ordered_rx: final_rx,
         shutdown_tx,
     }
 }
@@ -216,6 +234,53 @@ async fn flush_heap(
     Ok(())
 }
 
+fn route_partition_index(tgid: u32, partition_count: usize) -> usize {
+    (tgid as usize) % partition_count.max(1)
+}
+
+async fn run_partition_worker(
+    mut rx: mpsc::Receiver<EnrichedEvent>,
+    merge_tx: mpsc::Sender<EnrichedEvent>,
+) {
+    while let Some(event) = rx.recv().await {
+        if merge_tx.send(event).await.is_err() {
+            return;
+        }
+    }
+}
+
+async fn run_partition_router(
+    mut ordered_rx: mpsc::Receiver<EnrichedEvent>,
+    final_tx: mpsc::Sender<EnrichedEvent>,
+    partition_count: usize,
+    partition_buffer_size: usize,
+) {
+    let mut partition_txs = Vec::with_capacity(partition_count);
+    let mut worker_handles = Vec::with_capacity(partition_count);
+
+    for _ in 0..partition_count {
+        let (partition_tx, partition_rx) = mpsc::channel(partition_buffer_size.max(1));
+        partition_txs.push(partition_tx);
+        worker_handles.push(tokio::spawn(run_partition_worker(
+            partition_rx,
+            final_tx.clone(),
+        )));
+    }
+    drop(final_tx);
+
+    while let Some(event) = ordered_rx.recv().await {
+        let idx = route_partition_index(event.inner.tgid, partition_count);
+        if partition_txs[idx].send(event).await.is_err() {
+            warn!("partition worker channel closed for index={idx}");
+        }
+    }
+
+    drop(partition_txs);
+    for handle in worker_handles {
+        let _ = handle.await;
+    }
+}
+
 impl PipelineHandle {
     pub async fn next_event(&mut self) -> Option<EnrichedEvent> {
         self.ordered_rx.recv().await
@@ -228,15 +293,14 @@ impl PipelineHandle {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use std::time::Duration;
+    use std::{collections::HashMap, sync::Arc, time::Duration};
 
+    use aegis_ebpf_common::{EventType, MemoryEvent};
     use async_trait::async_trait;
     use tokio::sync::mpsc;
 
-    use super::{EnrichedEvent, PipelineHandle, config, spawn_pipeline_from_raw};
+    use super::{config, route_partition_index, spawn_pipeline_from_raw, EnrichedEvent, PipelineHandle};
     use crate::{ContextEnricher, NoopEnricher, PodMetadata};
-    use aegis_ebpf_common::{EventType, MemoryEvent};
 
     fn fake_event(timestamp_ns: u64, tgid: u32, pid: u32) -> MemoryEvent {
         MemoryEvent {
@@ -257,6 +321,15 @@ mod tests {
     ) -> (mpsc::Sender<MemoryEvent>, PipelineHandle) {
         let (raw_tx, raw_rx) = mpsc::channel(128);
         let handle = spawn_pipeline_from_raw(raw_rx, config::PipelineConfig::default(), enricher);
+        (raw_tx, handle)
+    }
+
+    fn spawn_test_pipeline_with_config(
+        enricher: Arc<dyn ContextEnricher>,
+        cfg: config::PipelineConfig,
+    ) -> (mpsc::Sender<MemoryEvent>, PipelineHandle) {
+        let (raw_tx, raw_rx) = mpsc::channel(128);
+        let handle = spawn_pipeline_from_raw(raw_rx, cfg, enricher);
         (raw_tx, handle)
     }
 
@@ -340,7 +413,6 @@ mod tests {
                 .expect("send should succeed");
         }
 
-        // Extract the ordered receiver so we can continue draining after shutdown consumes the handle.
         let (_dummy_tx, dummy_rx) = mpsc::channel(1);
         let mut rx = std::mem::replace(&mut handle.ordered_rx, dummy_rx);
         handle.shutdown().await;
@@ -354,16 +426,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reorder_in_order_passthrough() {
+    async fn in_order_passthrough() {
         let (raw_tx, mut handle) = spawn_test_pipeline(Arc::new(NoopEnricher));
         for ts in [100, 200, 300, 400, 500] {
             raw_tx
-                .send(fake_event(ts, ts as u32, ts as u32))
+                .send(fake_event(ts, 7, 7))
                 .await
                 .expect("send should succeed");
         }
 
-        tokio::time::sleep(Duration::from_millis(config::PipelineConfig::default().reorder_window_ms + 10)).await;
+        tokio::time::sleep(Duration::from_millis(
+            config::PipelineConfig::default().reorder_window_ms + 10,
+        ))
+        .await;
 
         let mut out = Vec::new();
         for _ in 0..5 {
@@ -374,16 +449,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reorder_out_of_order_events() {
+    async fn out_of_order_reordering() {
         let (raw_tx, mut handle) = spawn_test_pipeline(Arc::new(NoopEnricher));
         for ts in [300, 100, 500, 200, 400] {
             raw_tx
-                .send(fake_event(ts, ts as u32, ts as u32))
+                .send(fake_event(ts, 7, 7))
                 .await
                 .expect("send should succeed");
         }
 
-        tokio::time::sleep(Duration::from_millis(config::PipelineConfig::default().reorder_window_ms + 10)).await;
+        tokio::time::sleep(Duration::from_millis(
+            config::PipelineConfig::default().reorder_window_ms + 10,
+        ))
+        .await;
 
         let mut out = Vec::new();
         for _ in 0..5 {
@@ -394,17 +472,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reorder_capacity_flush_without_timer() {
-        let (raw_tx, raw_rx) = mpsc::channel(128);
+    async fn capacity_flush_no_sleep_needed() {
         let config = config::PipelineConfig {
             reorder_heap_capacity: 4,
             ..config::PipelineConfig::default()
         };
-        let mut handle = spawn_pipeline_from_raw(raw_rx, config, Arc::new(NoopEnricher));
+        let (raw_tx, mut handle) = spawn_test_pipeline_with_config(Arc::new(NoopEnricher), config);
 
         for ts in [40, 10, 30, 20] {
             raw_tx
-                .send(fake_event(ts, ts as u32, ts as u32))
+                .send(fake_event(ts, 11, 11))
                 .await
                 .expect("send should succeed");
         }
@@ -418,11 +495,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reorder_shutdown_flushes_remaining_events() {
+    async fn shutdown_flushes_remaining_events() {
         let (raw_tx, mut handle) = spawn_test_pipeline(Arc::new(NoopEnricher));
         for ts in [30, 10, 20] {
             raw_tx
-                .send(fake_event(ts, ts as u32, ts as u32))
+                .send(fake_event(ts, 12, 12))
                 .await
                 .expect("send should succeed");
         }
@@ -440,5 +517,117 @@ mod tests {
         }
 
         assert_eq!(out, vec![10, 20, 30]);
+    }
+
+    #[test]
+    fn same_tgid_maps_to_same_partition() {
+        let partition_count = 4usize;
+        let expected = 42usize % partition_count;
+        for _ in 0..100 {
+            assert_eq!(route_partition_index(42, partition_count), expected);
+        }
+    }
+
+    #[test]
+    fn different_tgids_distribute_across_partitions() {
+        let partition_count = 4usize;
+        let tgids = [0u32, 1, 2, 3, 4, 5, 6, 7];
+        let mapped: Vec<usize> = tgids
+            .iter()
+            .map(|tgid| route_partition_index(*tgid, partition_count))
+            .collect();
+        assert_eq!(mapped, vec![0, 1, 2, 3, 0, 1, 2, 3]);
+        assert_eq!(mapped[0], mapped[4]);
+    }
+
+    #[tokio::test]
+    async fn end_to_end_ordering_within_tgid() {
+        let (raw_tx, mut handle) = spawn_test_pipeline(Arc::new(NoopEnricher));
+        for ts in [50, 10, 90, 30, 70, 20, 60, 40, 80, 100] {
+            raw_tx
+                .send(fake_event(ts, 99, 99))
+                .await
+                .expect("send should succeed");
+        }
+
+        tokio::time::sleep(Duration::from_millis(
+            config::PipelineConfig::default().reorder_window_ms + 10,
+        ))
+        .await;
+
+        let mut out = Vec::new();
+        for _ in 0..10 {
+            let event = handle.next_event().await.expect("event should arrive");
+            if event.inner.tgid == 99 {
+                out.push(event.inner.timestamp_ns);
+            }
+        }
+
+        assert_eq!(out.len(), 10);
+        assert!(out.windows(2).all(|w| w[0] <= w[1]));
+    }
+
+    #[tokio::test]
+    async fn events_from_different_tgids_all_arrive() {
+        let (raw_tx, mut handle) = spawn_test_pipeline(Arc::new(NoopEnricher));
+        for (ts, tgid) in [(100u64, 1u32), (200, 2), (300, 3), (400, 4)] {
+            raw_tx
+                .send(fake_event(ts, tgid, tgid))
+                .await
+                .expect("send should succeed");
+        }
+
+        tokio::time::sleep(Duration::from_millis(
+            config::PipelineConfig::default().reorder_window_ms + 10,
+        ))
+        .await;
+
+        let mut counts = HashMap::new();
+        for _ in 0..4 {
+            let event = handle.next_event().await.expect("event should arrive");
+            *counts.entry(event.inner.tgid).or_insert(0usize) += 1;
+        }
+        assert_eq!(counts.get(&1), Some(&1));
+        assert_eq!(counts.get(&2), Some(&1));
+        assert_eq!(counts.get(&3), Some(&1));
+        assert_eq!(counts.get(&4), Some(&1));
+    }
+
+    #[tokio::test]
+    async fn shutdown_with_events_inflight_across_partitions() {
+        let (raw_tx, mut handle) = spawn_test_pipeline(Arc::new(NoopEnricher));
+        for (ts, tgid) in [
+            (110u64, 1u32),
+            (120, 1),
+            (210, 2),
+            (220, 2),
+            (310, 3),
+            (320, 3),
+            (410, 4),
+            (420, 4),
+        ] {
+            raw_tx
+                .send(fake_event(ts, tgid, tgid))
+                .await
+                .expect("send should succeed");
+        }
+
+        let (_dummy_tx, dummy_rx) = mpsc::channel(1);
+        let mut rx = std::mem::replace(&mut handle.ordered_rx, dummy_rx);
+        handle.shutdown().await;
+
+        let mut counts: HashMap<u32, usize> = HashMap::new();
+        while let Ok(Some(event)) = tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+            *counts.entry(event.inner.tgid).or_insert(0usize) += 1;
+            if counts.values().sum::<usize>() == 8 {
+                break;
+            }
+        }
+
+        assert_eq!(counts.values().sum::<usize>(), 8);
+        assert_eq!(counts.get(&1), Some(&2));
+        assert_eq!(counts.get(&2), Some(&2));
+        assert_eq!(counts.get(&3), Some(&2));
+        assert_eq!(counts.get(&4), Some(&2));
     }
 }
