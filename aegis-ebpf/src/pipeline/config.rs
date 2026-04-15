@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::AlertCallback;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PipelineConfig {
     pub channel_buffer_size: usize,
     pub reorder_window_ms: u64,
