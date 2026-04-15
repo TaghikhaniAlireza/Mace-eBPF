@@ -13,6 +13,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::warn as tracing_warn;
 
 use crate::{
+    alert::{Alert, AlertCallback},
     rules::{RuleError, loader::RuleSet},
     start_sensor, ContextEnricher, PodMetadata, SensorConfig,
 };
@@ -144,6 +145,7 @@ fn spawn_pipeline_from_raw(
         pipeline_config.partition_count,
         channel_buffer_size,
         rules,
+        pipeline_config.on_alert,
     ));
 
     PipelineHandle {
@@ -294,16 +296,20 @@ async fn run_partition_worker(
     mut rx: mpsc::Receiver<EnrichedEvent>,
     merge_tx: mpsc::Sender<EnrichedEvent>,
     rules: Arc<RuleSet>,
+    on_alert: Option<AlertCallback>,
 ) {
     while let Some(event) = rx.recv().await {
         let matches = rules.evaluate(&event);
-        if !matches.is_empty() {
-            let rule_ids: Vec<&str> = matches.iter().map(|rule| rule.id.as_str()).collect();
+        for rule in &matches {
             tracing_warn!(
                 tgid = event.inner.tgid,
-                rules = ?rule_ids,
+                rule_id = %rule.id,
                 "Rule match detected"
             );
+            if let Some(cb) = &on_alert {
+                let alert = Alert::from_rule_and_event(rule, &event);
+                cb(alert).await;
+            }
         }
         if merge_tx.send(event).await.is_err() {
             return;
@@ -317,6 +323,7 @@ async fn run_partition_router(
     partition_count: usize,
     partition_buffer_size: usize,
     rules: Arc<RuleSet>,
+    on_alert: Option<AlertCallback>,
 ) {
     let mut partition_txs = Vec::with_capacity(partition_count);
     let mut worker_handles = Vec::with_capacity(partition_count);
@@ -328,6 +335,7 @@ async fn run_partition_router(
             partition_rx,
             final_tx.clone(),
             Arc::clone(&rules),
+            on_alert.clone(),
         )));
     }
     drop(final_tx);

@@ -9,6 +9,8 @@ use std::{
 pub mod enrichment;
 pub mod pipeline;
 pub mod rules;
+pub mod alert;
+pub use alert::{Alert, AlertCallback};
 pub use enrichment::{ContextEnricher, NoopEnricher, PodMetadata};
 pub use pipeline::config::PipelineConfig;
 pub use pipeline::{EnrichedEvent, PipelineError, PipelineHandle, start_pipeline};

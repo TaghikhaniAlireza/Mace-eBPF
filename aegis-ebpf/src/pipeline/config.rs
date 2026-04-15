@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use crate::AlertCallback;
+
 #[derive(Clone, Debug)]
 pub struct PipelineConfig {
     pub channel_buffer_size: usize,
@@ -7,6 +9,7 @@ pub struct PipelineConfig {
     pub reorder_heap_capacity: usize,
     pub partition_count: usize,
     pub rules_path: Option<PathBuf>,
+    pub on_alert: Option<AlertCallback>,
 }
 
 impl Default for PipelineConfig {
@@ -17,6 +20,7 @@ impl Default for PipelineConfig {
             reorder_heap_capacity: 1024,
             partition_count: 4,
             rules_path: None,
+            on_alert: None,
         }
     }
 }
