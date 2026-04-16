@@ -58,7 +58,9 @@ impl StateTracker {
         if is_rwx_mapping(event.inner.flags) {
             state.total_rwx_bytes = state.total_rwx_bytes.saturating_add(event.inner.len);
         }
-        if event.inner.event_type == EventType::MprotectWX && (event.inner.flags & PROT_EXEC) != 0 {
+        if matches!(event.inner.event_type, EventType::MprotectWX)
+            && (event.inner.flags & PROT_EXEC) != 0
+        {
             state.mprotect_exec_count += 1;
         }
 
