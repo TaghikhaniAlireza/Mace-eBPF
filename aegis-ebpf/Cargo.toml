@@ -33,6 +33,8 @@ tracing = "0.1"
 futures = "0.3"
 arc-swap = "1"
 notify = "6"
+prost = "0.13"
+prost-types = "0.13"
 
 [dev-dependencies]
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
@@ -40,6 +42,7 @@ tracing-subscriber = { version = "0.3", features = ["fmt"] }
 anyhow = { workspace = true }
 aya-build = { workspace = true }
 cargo_metadata = { workspace = true }
+prost-build = "0.13"
 # TODO(https://github.com/rust-lang/cargo/issues/12375): this should be an artifact dependency, but
 # it's not possible to tell cargo to use `-Z build-std` to build it. We cargo-in-cargo in the build
 # script to build this, but we want to teach cargo about the dependency so that cache invalidation

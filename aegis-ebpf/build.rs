@@ -23,5 +23,16 @@ fn main() -> anyhow::Result<()> {
             .as_str(),
         ..Default::default()
     };
-    aya_build::build_ebpf([ebpf_package], Toolchain::default())
+    aya_build::build_ebpf([ebpf_package], Toolchain::default())?;
+
+    // Compile protobuf schemas at build time.
+    prost_build::Config::new()
+        .out_dir(std::env::var("OUT_DIR").context("OUT_DIR missing")?)
+        .compile_protos(&["proto/alert.proto"], &["proto/"])
+        .context("failed to compile protos")?;
+
+    // Rebuild when proto schema changes.
+    println!("cargo:rerun-if-changed=proto/alert.proto");
+
+    Ok(())
 }

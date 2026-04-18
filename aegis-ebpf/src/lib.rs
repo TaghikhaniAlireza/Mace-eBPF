@@ -12,6 +12,7 @@ pub mod alert;
 pub mod enrichment;
 pub mod ffi;
 pub mod pipeline;
+pub mod proto;
 pub mod rules;
 pub mod state;
 use aegis_ebpf_common::MemoryEvent;
