@@ -62,7 +62,8 @@ jobs:
           libelf-dev \
           linux-headers-$(uname -r) \
           pkg-config \
-          build-essential
+          build-essential \
+          protobuf-compiler
         
         # Set LLVM 19 as default
         sudo update-alternatives --install /usr/bin/llvm-config llvm-config /usr/bin/llvm-config-19 100
@@ -126,7 +127,8 @@ jobs:
           clang-19 \
           libelf-dev \
           linux-headers-$(uname -r) \
-          build-essential
+          build-essential \
+          protobuf-compiler
         sudo update-alternatives --install /usr/bin/llvm-config llvm-config /usr/bin/llvm-config-19 100
         sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-19 100
     
@@ -186,7 +188,7 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y llvm-19 clang-19 libelf-dev linux-headers-$(uname -r)
+        sudo apt-get install -y llvm-19 clang-19 libelf-dev linux-headers-$(uname -r) protobuf-compiler
         sudo update-alternatives --install /usr/bin/llvm-config llvm-config /usr/bin/llvm-config-19 100
     
     - name: Install bpf-linker
@@ -245,7 +247,7 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y llvm-19 clang-19 libelf-dev linux-headers-$(uname -r)
+        sudo apt-get install -y llvm-19 clang-19 libelf-dev linux-headers-$(uname -r) protobuf-compiler
         sudo update-alternatives --install /usr/bin/llvm-config llvm-config /usr/bin/llvm-config-19 100
     
     - name: Install bpf-linker
