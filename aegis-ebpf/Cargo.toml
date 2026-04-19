@@ -45,6 +45,7 @@ anyhow = { workspace = true }
 aya-build = { workspace = true }
 cargo_metadata = { workspace = true }
 prost-build = "0.13"
+cbindgen = "0.27"
 # TODO(https://github.com/rust-lang/cargo/issues/12375): this should be an artifact dependency, but
 # it's not possible to tell cargo to use `-Z build-std` to build it. We cargo-in-cargo in the build
 # script to build this, but we want to teach cargo about the dependency so that cache invalidation
@@ -62,6 +63,7 @@ aegis-ebpf-ebpf = { path = "../aegis-ebpf-ebpf" }
 [lib]
 name = "aegis_ebpf"
 path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
 
 [[bin]]
 name = "aegis-ebpf"

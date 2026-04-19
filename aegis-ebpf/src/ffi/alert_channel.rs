@@ -273,6 +273,20 @@ pub unsafe extern "C" fn aegis_alert_channel_try_recv(
     }
 }
 
+/// Compatibility alias for older C API naming.
+///
+/// # Safety
+/// - same requirements as `aegis_alert_channel_try_recv`
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn aegis_alert_channel_recv(
+    handle: *mut AegisAlertChannelHandle,
+    out_buffer: *mut u8,
+    buffer_size: usize,
+) -> i32 {
+    // SAFETY: forwards directly to the canonical implementation.
+    unsafe { aegis_alert_channel_try_recv(handle, out_buffer, buffer_size) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

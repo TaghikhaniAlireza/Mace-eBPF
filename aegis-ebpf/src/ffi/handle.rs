@@ -172,6 +172,38 @@ pub unsafe extern "C" fn aegis_arena_pop(
     }
 }
 
+/// Try to push an event into the arena.
+///
+/// C-friendly alias for `aegis_arena_push`.
+///
+/// # Safety
+/// - handle must be a valid pointer returned by aegis_arena_new()
+/// - event must point to a valid RawMemoryEvent
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn aegis_arena_try_push(
+    handle: *mut AegisArenaHandle,
+    event: *const RawMemoryEvent,
+) -> i32 {
+    // SAFETY: this function forwards the exact same FFI contract.
+    unsafe { aegis_arena_push(handle, event) as i32 }
+}
+
+/// Try to pop an event from the arena.
+///
+/// C-friendly alias for `aegis_arena_pop`.
+///
+/// # Safety
+/// - handle must be a valid pointer returned by aegis_arena_new()
+/// - out_event must point to a valid RawMemoryEvent buffer
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn aegis_arena_try_pop(
+    handle: *mut AegisArenaHandle,
+    out_event: *mut RawMemoryEvent,
+) -> i32 {
+    // SAFETY: this function forwards the exact same FFI contract.
+    unsafe { aegis_arena_pop(handle, out_event) as i32 }
+}
+
 /// Get the number of events currently in the arena.
 /// Returns 0 if handle is null or a panic occurs.
 ///
