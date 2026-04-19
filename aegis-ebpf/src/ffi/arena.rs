@@ -4,6 +4,7 @@ use std::sync::{
 };
 
 use super::types::RawMemoryEvent;
+use crate::observability::metrics::{record_event_dropped, record_event_ingested};
 
 #[derive(Debug)]
 pub struct EventArena {
@@ -52,6 +53,7 @@ impl EventArena {
 
         let next_write = (write + 1) % self.capacity;
         if next_write == read {
+            record_event_dropped();
             return Err(ArenaError::Full);
         }
 
@@ -64,6 +66,7 @@ impl EventArena {
         }
 
         self.write_index.store(next_write, Ordering::Release);
+        record_event_ingested();
         Ok(write)
     }
 

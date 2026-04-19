@@ -12,6 +12,7 @@ use uuid::Uuid;
 use super::handle::AegisErrorCode;
 use crate::{
     alert::{Alert as RustAlert, AlertCallback},
+    observability::metrics::record_alert_fired,
     proto::{Alert as ProtoAlert, AlertBatch, Severity as ProtoSeverity},
     rules::Severity as RustSeverity,
 };
@@ -39,20 +40,27 @@ impl AlertChannel {
 
     /// Send an alert to the channel.
     pub async fn send(&self, alert: RustAlert) -> Result<(), mpsc::error::SendError<ProtoAlert>> {
+        let rule_id = alert.rule_id.clone();
         let proto_alert = convert_alert_to_proto(alert);
-        self.tx.send(proto_alert).await
+        self.tx.send(proto_alert).await?;
+        record_alert_fired(&rule_id);
+        Ok(())
     }
 
     /// Try to send an alert without blocking.
     ///
     /// Returns Ok(()) if sent, Err if full or closed.
     #[allow(clippy::result_large_err)]
-    pub fn try_send(
-        &self,
-        alert: RustAlert,
-    ) -> Result<(), mpsc::error::TrySendError<ProtoAlert>> {
+    pub fn try_send(&self, alert: RustAlert) -> Result<(), mpsc::error::TrySendError<ProtoAlert>> {
+        let rule_id = alert.rule_id.clone();
         let proto_alert = convert_alert_to_proto(alert);
-        self.tx.try_send(proto_alert)
+        match self.tx.try_send(proto_alert) {
+            Ok(()) => {
+                record_alert_fired(&rule_id);
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// Receive the next alert (async, blocking).

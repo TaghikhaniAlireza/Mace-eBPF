@@ -10,12 +10,20 @@ use std::{
 use aegis_ebpf_common::MemoryEvent;
 use arc_swap::ArcSwap;
 use log::warn;
+#[cfg(feature = "otel")]
+use opentelemetry::trace::Span;
 use tokio::sync::{mpsc, oneshot};
 use tracing::warn as tracing_warn;
 
+#[cfg(feature = "otel")]
+use crate::observability::otel::OtelExporter;
 use crate::{
     ContextEnricher, PodMetadata, SensorConfig,
     alert::{Alert, AlertCallback},
+    observability::metrics::{
+        record_event_ingested as record_pipeline_event_ingested, record_pipeline_latency,
+        update_reorder_buffer_size, update_worker_queue_depth,
+    },
     rules::{RuleError, loader::RuleSet, watcher::RuleWatcher},
     start_sensor,
     state::StateTracker,
@@ -207,6 +215,7 @@ async fn run_enrichment_worker(
         if shutdown_requested {
             match raw_rx.try_recv() {
                 Ok(event) => {
+                    record_pipeline_event_ingested();
                     if send_enriched_event(event, &enriched_tx, enricher.as_ref())
                         .await
                         .is_err()
@@ -223,6 +232,7 @@ async fn run_enrichment_worker(
         tokio::select! {
             maybe_event = raw_rx.recv() => {
                 let Some(event) = maybe_event else { return };
+                record_pipeline_event_ingested();
                 if send_enriched_event(event, &enriched_tx, enricher.as_ref()).await.is_err() {
                     return;
                 }
@@ -267,6 +277,10 @@ async fn run_reorder_task(
     let mut deadline: Option<Instant> = None;
     let effective_capacity = reorder_heap_capacity.clamp(1, HEAP_CAPACITY_LIMIT);
 
+    let refresh_heap_metric = |heap: &BinaryHeap<Reverse<EnrichedEvent>>| {
+        update_reorder_buffer_size(heap.len());
+    };
+
     loop {
         if let Some(deadline_at) = deadline {
             let sleep = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline_at));
@@ -277,6 +291,7 @@ async fn run_reorder_task(
                     match maybe_event {
                         Some(event) => {
                             heap.push(Reverse(event));
+                            refresh_heap_metric(&heap);
                             if heap.len() >= effective_capacity {
                                 if flush_heap(&mut heap, &ordered_tx).await.is_err() {
                                     return;
@@ -301,6 +316,7 @@ async fn run_reorder_task(
             match enriched_rx.recv().await {
                 Some(event) => {
                     heap.push(Reverse(event));
+                    refresh_heap_metric(&heap);
                     deadline = Some(Instant::now() + Duration::from_millis(reorder_window_ms));
                     if heap.len() >= effective_capacity {
                         if flush_heap(&mut heap, &ordered_tx).await.is_err() {
@@ -327,6 +343,7 @@ async fn flush_heap(
             return Err(());
         }
     }
+    update_reorder_buffer_size(0);
     Ok(())
 }
 
@@ -337,6 +354,7 @@ fn route_partition_index(tgid: u32, partition_count: usize) -> usize {
 async fn run_partition_worker(
     mut rx: mpsc::Receiver<EnrichedEvent>,
     merge_tx: mpsc::Sender<EnrichedEvent>,
+    worker_id: usize,
     rules: Arc<ArcSwap<RuleSet>>,
     on_alert: Option<AlertCallback>,
     state_window_ms: u64,
@@ -344,6 +362,17 @@ async fn run_partition_worker(
     let mut state_tracker = StateTracker::new(state_window_ms);
 
     while let Some(event) = rx.recv().await {
+        update_worker_queue_depth(worker_id, rx.len());
+
+        let start = std::time::Instant::now();
+
+        #[cfg(feature = "otel")]
+        let mut pipe_span = OtelExporter::create_pipeline_span(
+            event.inner.tgid,
+            event.inner.event_type as u32,
+            worker_id,
+        );
+
         state_tracker.update(&event);
         state_tracker.expire_old(event.inner.timestamp_ns);
         let state = state_tracker.get(event.inner.tgid);
@@ -356,11 +385,23 @@ async fn run_partition_worker(
                 rule_id = %rule.id,
                 "Rule match detected"
             );
+            #[cfg(feature = "otel")]
+            OtelExporter::record_rule_match(&mut pipe_span, rule.id.as_str(), true);
             if let Some(cb) = &on_alert {
                 let alert = Alert::from_rule_and_event(rule, &event);
                 cb(alert).await;
             }
         }
+        #[cfg(feature = "otel")]
+        if matches.is_empty() {
+            OtelExporter::record_rule_match(&mut pipe_span, "", false);
+        }
+
+        record_pipeline_latency(start.elapsed().as_nanos() as u64);
+
+        #[cfg(feature = "otel")]
+        pipe_span.end();
+
         if merge_tx.send(event).await.is_err() {
             return;
         }
@@ -379,12 +420,13 @@ async fn run_partition_router(
     let mut partition_txs = Vec::with_capacity(partition_count);
     let mut worker_handles = Vec::with_capacity(partition_count);
 
-    for _ in 0..partition_count {
+    for idx in 0..partition_count {
         let (partition_tx, partition_rx) = mpsc::channel(partition_buffer_size.max(1));
         partition_txs.push(partition_tx);
         worker_handles.push(tokio::spawn(run_partition_worker(
             partition_rx,
             final_tx.clone(),
+            idx,
             Arc::clone(&rules),
             on_alert.clone(),
             state_window_ms,

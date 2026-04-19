@@ -328,10 +328,12 @@ mod tests {
         }
 
         wait_for_alerts(&alerts, 1).await;
-        let alerts = alerts.lock().expect("alerts mutex poisoned");
-        assert_eq!(alerts.len(), 1);
-        assert_eq!(alerts[0].rule_id, "STATE-PIPE-1");
-        drop(alerts);
+        let (len, first_rule) = {
+            let guard = alerts.lock().expect("alerts mutex poisoned");
+            (guard.len(), guard.first().map(|a| a.rule_id.clone()))
+        };
+        assert_eq!(len, 1);
+        assert_eq!(first_rule.as_deref(), Some("STATE-PIPE-1"));
 
         handle.shutdown().await;
     }

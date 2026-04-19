@@ -1,9 +1,10 @@
-use anyhow::{Context as _, anyhow};
-use aya_build::Toolchain;
 use std::{
     env, fs,
     path::{Path, PathBuf},
 };
+
+use anyhow::{Context as _, anyhow};
+use aya_build::Toolchain;
 
 fn main() -> anyhow::Result<()> {
     println!("cargo::rustc-check-cfg=cfg(cbindgen)");
@@ -58,7 +59,10 @@ fn main() -> anyhow::Result<()> {
         Ok(bindings) => {
             bindings.write_to_file(&header_path);
             ensure_ffi_function_declarations(&header_path)?;
-            println!("cargo:warning=Generated C header: {}", header_path.display());
+            println!(
+                "cargo:warning=Generated C header: {}",
+                header_path.display()
+            );
         }
         Err(err) => {
             println!("cargo:warning=cbindgen skipped: {err}");

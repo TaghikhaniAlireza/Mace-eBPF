@@ -319,11 +319,11 @@ rules:
             .expect("send should succeed");
         let _ = handle.next_event().await.expect("event should arrive");
         wait_for_alert_rule_id(&alerts, "RULE-B", Duration::from_millis(500)).await;
-        let alerts = alerts.lock().expect("alerts mutex poisoned");
-        assert!(
-            alerts.iter().any(|alert| alert.rule_id == "RULE-B"),
-            "expected RULE-B alert after hot-reload"
-        );
+        let rule_b_present = {
+            let guard = alerts.lock().expect("alerts mutex poisoned");
+            guard.iter().any(|alert| alert.rule_id == "RULE-B")
+        };
+        assert!(rule_b_present, "expected RULE-B alert after hot-reload");
 
         handle.shutdown().await;
         let _ = fs::remove_file(path);

@@ -9,6 +9,15 @@ license.workspace = true
 default = []
 tokio = []
 kubernetes = ["dep:kube", "dep:k8s-openapi", "dep:moka", "tokio"]
+# Observability (optional; metrics macros compile to no-ops without `metrics` recorder)
+prometheus = ["dep:metrics", "metrics-exporter-prometheus/http-listener"]
+otel = [
+    "dep:metrics",
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+]
+observability = ["prometheus", "otel"]
 
 [dependencies]
 aegis-ebpf-common = { path = "../aegis-ebpf-common", features = ["user"] }
@@ -38,26 +47,21 @@ prost-types = "0.13"
 serde_json = "1"
 uuid = { version = "1.11", features = ["v4"] }
 
+metrics = { version = "0.24", optional = true }
+metrics-exporter-prometheus = { version = "0.18", default-features = false, optional = true }
+opentelemetry = { version = "0.31", optional = true }
+opentelemetry_sdk = { version = "0.31", features = ["rt-tokio", "trace"], optional = true }
+opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic", "trace"], optional = true }
+
 [dev-dependencies]
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
+
 [build-dependencies]
 anyhow = { workspace = true }
 aya-build = { workspace = true }
 cargo_metadata = { workspace = true }
 prost-build = "0.13"
 cbindgen = "0.27"
-# TODO(https://github.com/rust-lang/cargo/issues/12375): this should be an artifact dependency, but
-# it's not possible to tell cargo to use `-Z build-std` to build it. We cargo-in-cargo in the build
-# script to build this, but we want to teach cargo about the dependency so that cache invalidation
-# works properly.
-#
-# Note also that https://github.com/rust-lang/cargo/issues/10593 occurs when `target = ...` is added
-# to an artifact dependency; it seems possible to work around that by setting `resolver = "1"` in
-# Cargo.toml in the workspace root.
-#
-# Finally note that *any* usage of `artifact = ...` in *any* Cargo.toml in the workspace breaks
-# workflows with stable cargo; stable cargo outright refuses to load manifests that use unstable
-# features.
 aegis-ebpf-ebpf = { path = "../aegis-ebpf-ebpf" }
 
 [lib]
