@@ -54,15 +54,25 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y \
-          llvm \
-          clang \
+          llvm-19 \
+          llvm-19-dev \
+          libllvm19 \
+          clang-19 \
+          libclang-19-dev \
           libelf-dev \
           linux-headers-$(uname -r) \
           pkg-config \
           build-essential
+        
+        # Set LLVM 19 as default
+        sudo update-alternatives --install /usr/bin/llvm-config llvm-config /usr/bin/llvm-config-19 100
+        sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-19 100
     
-    - name: Install bpf-linker (without LLVM feature)
-      run: cargo install bpf-linker --version 0.10.3 --no-default-features
+    - name: Install bpf-linker with LLVM 19
+      run: |
+        cargo install bpf-linker --version 0.10.3 --features llvm-19
+      env:
+        LLVM_SYS_190_PREFIX: /usr/lib/llvm-19
     
     - name: Check formatting
       run: cargo fmt --all -- --check
@@ -111,14 +121,19 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y \
-          llvm \
-          clang \
+          llvm-19 \
+          llvm-19-dev \
+          clang-19 \
           libelf-dev \
           linux-headers-$(uname -r) \
           build-essential
+        sudo update-alternatives --install /usr/bin/llvm-config llvm-config /usr/bin/llvm-config-19 100
+        sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-19 100
     
     - name: Install bpf-linker
-      run: cargo install bpf-linker --version 0.10.3 --no-default-features
+      run: cargo install bpf-linker --version 0.10.3 --features llvm-19
+      env:
+        LLVM_SYS_190_PREFIX: /usr/lib/llvm-19
     
     - name: Build eBPF programs
       run: cargo xtask build-ebpf --release || true
@@ -171,10 +186,13 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y llvm clang libelf-dev linux-headers-$(uname -r)
+        sudo apt-get install -y llvm-19 clang-19 libelf-dev linux-headers-$(uname -r)
+        sudo update-alternatives --install /usr/bin/llvm-config llvm-config /usr/bin/llvm-config-19 100
     
     - name: Install bpf-linker
-      run: cargo install bpf-linker --version 0.10.3 --no-default-features
+      run: cargo install bpf-linker --version 0.10.3 --features llvm-19
+      env:
+        LLVM_SYS_190_PREFIX: /usr/lib/llvm-19
     
     - name: Build eBPF programs
       run: cargo xtask build-ebpf --release || true
@@ -227,10 +245,13 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y llvm clang libelf-dev linux-headers-$(uname -r)
+        sudo apt-get install -y llvm-19 clang-19 libelf-dev linux-headers-$(uname -r)
+        sudo update-alternatives --install /usr/bin/llvm-config llvm-config /usr/bin/llvm-config-19 100
     
     - name: Install bpf-linker
-      run: cargo install bpf-linker --version 0.10.3 --no-default-features
+      run: cargo install bpf-linker --version 0.10.3 --features llvm-19
+      env:
+        LLVM_SYS_190_PREFIX: /usr/lib/llvm-19
     
     - name: Build eBPF programs
       run: cargo xtask build-ebpf --release || true
