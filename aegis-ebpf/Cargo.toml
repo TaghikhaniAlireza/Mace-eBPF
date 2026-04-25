@@ -54,7 +54,12 @@ opentelemetry_sdk = { version = "0.31", features = ["rt-tokio", "trace"], option
 opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic", "trace"], optional = true }
 
 [dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
+
+[[bench]]
+name = "arena_benchmark"
+harness = false
 
 [build-dependencies]
 anyhow = { workspace = true }
