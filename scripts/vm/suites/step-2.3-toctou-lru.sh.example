@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Copy to step-2.3-toctou-lru.sh (without .example), chmod +x, and implement:
-#   - TOCTOU race regression checks against the eBPF program
-#   - LRU map orphan eviction behaviour
-# This file is intentionally not executable so it is skipped by run-test.sh.
+# The production Step 2.3 suite is `step-2.3-toctou-lru.sh` (same directory, executable).
+# Copy this file only if you want a private experimental variant — keep the `.example` suffix
+# so `run-test.sh` skips it.
 
-echo "step-2.3: template only — implement TOCTOU + LRU checks here"
+echo "Use ./step-2.3-toctou-lru.sh instead."
 exit 0

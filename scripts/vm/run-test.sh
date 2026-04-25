@@ -32,6 +32,7 @@ fi
 chmod +x "$ART/aegis-ebpf-loader" || true
 
 export AEGIS_EBPF_OBJECT="$ART/aegis-ebpf"
+export AEGIS_ARTIFACT_DIR="$ART"
 
 echo "--- aegis-ebpf-loader ---" | tee -a "$OUT"
 if "$ART/aegis-ebpf-loader" "$ART/aegis-ebpf" 2>&1 | tee -a "$OUT"; then

@@ -28,7 +28,12 @@ Images are chosen to approximate **5.10 / 5.15 / 6.1 / 6.6+** kernel families. O
 
 ## Step 2.3 extension
 
-`run-test.sh` runs every **executable** `*.sh` in `scripts/vm/suites/` (skipping `*.example`). Add `step-2.3-toctou-lru.sh` for TOCTOU and LRU eviction tests.
+`run-test.sh` runs every **executable** `*.sh` in `scripts/vm/suites/` (skipping `*.example`).
+
+- **`suites/step-2.3-toctou-lru.sh`** (committed, executable): starts `aegis-ebpf-loader --daemon`, spawns many short-lived `python3 -c 'mmap...'` children, periodically logs `MemAvailable` and (if `bpftool` is present) `pending_syscalls` entry counts, and fails on large `MemAvailable` drops or suspicious `dmesg` lines.
+- **`aegis-ebpf-loader --daemon`**: holds BPF attached until SIGTERM so the suite can run while programs are live.
+
+Tune with env vars documented at the top of `step-2.3-toctou-lru.sh`.
 
 ## CI note
 
