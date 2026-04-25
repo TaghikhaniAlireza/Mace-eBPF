@@ -21,7 +21,19 @@ cd aegis-ebpf/pkg/aegis
 go test -v ./...
 ```
 
+Or use the helper (sets `LD_LIBRARY_PATH` to the workspace `target/debug`):
+
+```bash
+cargo build -p aegis-ebpf
+./aegis-ebpf/pkg/aegis/run_go_tests.sh
+```
+
 The cgo linker uses `-L../../../target/debug` relative to this package directory.
+
+### Low-level handles (GC / cgo stress)
+
+- **`Arena`** (`arena_handle.go`) — `NewArena`, `TryPush` / `TryPop`, explicit **`Close()`**; `sync.Once` ensures **`aegis_arena_free`** runs once even if **`Close`** races a **`SetFinalizer`** cleanup.
+- **`AlertChannelHandle`** (`alert_handle.go`) — same pattern for **`aegis_alert_channel_*`** without background goroutines.
 
 ## Usage
 
