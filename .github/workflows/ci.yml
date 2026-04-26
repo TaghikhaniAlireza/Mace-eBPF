@@ -11,6 +11,10 @@
 #   **verifier** runs at `BPF_PROG_LOAD` time, which is exercised by tests that
 #   load the object (some are `#[ignore]` on restricted kernels; we run them
 #   on GitHub-hosted Ubuntu where BPF tracepoints are typically available).
+# - Do **not** use `cargo ... --all-features` on the whole workspace: that enables
+#   `aegis-ebpf-ebpf/ebpf-bin`, which builds the `#!no_std` BPF binary for the host and hits
+#   `E0152` duplicate `panic_impl` with `std`. eBPF is built only via `aegis-ebpf`'s `build.rs`
+#   for `bpfel-unknown-none` when `ebpf-bin` stays off for the host package graph.
 # - If this job becomes flaky on a future runner image, narrow or gate the
 #   `--include-ignored` step (see comments on that step).
 # =============================================================================
@@ -87,10 +91,16 @@ jobs:
       - name: Install bpf-linker
         run: cargo install bpf-linker --version 0.10.3
 
-      # --- Build: compiles workspace members and triggers eBPF build via `build.rs`.
-      #     Any failure here (including eBPF compile / link errors) fails the job.
+      # --- Build: default features for all workspace members (see header: no `--all-features`).
+      #     `aegis-ebpf/build.rs` still compiles the real eBPF ELF for `bpfel-unknown-none`.
       - name: Build workspace
-        run: cargo build --workspace --all-features --verbose
+        run: cargo build --workspace --verbose
+
+      # --- Optional feature smoke: `observability_integration.rs` is `cfg(feature = "prometheus")`.
+      - name: Build and test (prometheus feature on aegis-ebpf)
+        run: |
+          cargo build -p aegis-ebpf --features prometheus --verbose
+          cargo test -p aegis-ebpf --features prometheus --test observability_integration --verbose
 
       # --- Tests under root: `.cargo/linux-test-runner.sh` wraps test binaries with
       #     `sudo -E` so `CAP_BPF` is available for loader / verifier integration tests.
@@ -112,4 +122,4 @@ jobs:
             "HOME=${HOME}" \
             "RUSTUP_HOME=${RUSTUP_HOME:-${HOME}/.rustup}" \
             "CARGO_HOME=${CARGO_HOME:-${HOME}/.cargo}" \
-            cargo test --workspace --all-features --verbose -- --include-ignored
+            cargo test --workspace --verbose -- --include-ignored
