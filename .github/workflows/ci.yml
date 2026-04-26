@@ -48,15 +48,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Install stable Rust (clippy + rustfmt)
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-
+      # Install nightly first, then stable last so **stable** is the default `cargo` toolchain
+      # (plain `cargo clippy` would otherwise resolve to nightly, which has no clippy here).
       - name: Install nightly Rust (rustfmt + build-std for aegis-ebpf build.rs)
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt, rust-src
+
+      - name: Install stable Rust (clippy + rustfmt)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
 
       # Same toolchain inputs as `build-and-test` so `aegis-ebpf/build.rs` (prost, nested eBPF)
       # can run under `cargo clippy`.
@@ -88,7 +90,7 @@ jobs:
 
       # Exclude `aegis-ebpf-ebpf`: `no_std` BPF crate, not clippy'd for the host target.
       - name: clippy
-        run: cargo clippy --workspace --exclude aegis-ebpf-ebpf --all-targets -- -D warnings
+        run: cargo +stable clippy --workspace --exclude aegis-ebpf-ebpf --all-targets -- -D warnings
 
       # `cargo audit` consults the RustSec advisory DB (includes CVSS metadata where published).
       # Prefer `cargo deny` + `deny.toml` for licenses/bans/yanking; there is no `deny.toml` yet.
@@ -114,17 +116,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      # --- Rust: stable is the primary host toolchain; nightly + rust-src is
-      #     required for `aya_build` / `-Z build-std` when compiling `aegis-ebpf-ebpf`.
-      - name: Install stable Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy, rust-src
-
+      # Nightly first (rust-src for nested eBPF build), then stable so plain `cargo` is stable.
       - name: Install nightly Rust (eBPF / build-std)
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy, rust-src
 
       # --- Cargo cache: registry + git dependencies + `target/` (speeds rebuilds).
       - name: Cache Cargo home and build artifacts
