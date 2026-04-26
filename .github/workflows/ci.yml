@@ -100,6 +100,82 @@ jobs:
       - name: cargo audit (dependencies)
         run: cargo audit
 
+  # Go + Python FFI smoke tests against `target/debug/libaegis_ebpf.so`.
+  # Paths: Go module is `aegis-ebpf/pkg/aegis` (not `./bindings/go`). Python package is `aegis-ebpf/python`.
+  ffi-bindings-test:
+    name: FFI bindings (Go + Python)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      # `aegis-ebpf` build.rs needs nightly + rust-src + same native toolchain as other jobs.
+      - name: Install nightly Rust (eBPF / build-std)
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install eBPF and build dependencies
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang \
+            llvm \
+            libelf-dev \
+            zlib1g-dev \
+            linux-headers-generic \
+            "linux-headers-$(uname -r)" \
+            pkg-config \
+            build-essential \
+            protobuf-compiler
+
+      - name: Install bpf-linker
+        run: cargo install bpf-linker --version 0.10.3
+
+      - name: Cache Cargo home
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ffi-bindings-test
+
+      - name: Build shared library (debug)
+        run: cargo build -p aegis-ebpf --verbose
+
+      # --- Go (cgo): link against `target/debug/libaegis_ebpf.so`
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Go tests (race)
+        env:
+          CGO_ENABLED: "1"
+          # Allow the linker to find `libaegis_ebpf.so` (package `#cgo LDFLAGS` also uses -L/-rpath).
+          CGO_LDFLAGS: "-L${{ github.workspace }}/target/debug -laegis_ebpf -Wl,-rpath,${{ github.workspace }}/target/debug"
+          LD_LIBRARY_PATH: "${{ github.workspace }}/target/debug"
+        working-directory: aegis-ebpf/pkg/aegis
+        run: go test -race -v ./...
+
+      # --- Python (ctypes): load `.so` at runtime via LD_LIBRARY_PATH
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Python tests
+        env:
+          LD_LIBRARY_PATH: "${{ github.workspace }}/target/debug"
+        working-directory: aegis-ebpf/python
+        run: |
+          set -euxo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip install pytest
+          python -m pytest tests/ -v
+
   build-and-test:
     name: Build and test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
