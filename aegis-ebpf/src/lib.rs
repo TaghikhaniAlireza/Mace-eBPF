@@ -17,7 +17,7 @@ pub mod proto;
 pub mod rules;
 pub mod state;
 use aegis_ebpf_common::MemoryEvent;
-pub use alert::{Alert, AlertCallback};
+pub use alert::{Alert, AlertCallback, StandardizedEvent, StandardizedEventCallback};
 use anyhow::Context as _;
 use aya::{
     Btf, Ebpf, EbpfLoader, Endianness,

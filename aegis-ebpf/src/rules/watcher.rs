@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::{Arc, mpsc},
     thread,
@@ -9,6 +10,7 @@ use arc_swap::ArcSwap;
 use notify::{
     Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher, event::ModifyKind,
 };
+use regex::Regex;
 use tracing::error;
 
 use super::{RuleError, loader::RuleSet};
@@ -16,12 +18,15 @@ use crate::alert::AlertCallback;
 
 pub struct RuleWatcher {
     rules: Arc<ArcSwap<RuleSet>>,
+    /// Pre-compiled regexes keyed by rule id (cgroup + process-name patterns at last successful load).
+    precompiled_rules: Arc<ArcSwap<HashMap<String, Regex>>>,
     _watcher: RecommendedWatcher,
 }
 
 impl RuleWatcher {
     pub fn new(path: PathBuf) -> Result<Self, RuleError> {
         let initial = load_ruleset_from_path(&path)?;
+        let precompiled = Arc::new(ArcSwap::from_pointee(build_precompiled_map(&initial)));
         let rules = Arc::new(ArcSwap::from_pointee(initial));
 
         let (event_tx, event_rx) = mpsc::channel::<notify::Result<Event>>();
@@ -39,6 +44,7 @@ impl RuleWatcher {
             .map_err(|err| RuleError::IoError(std::io::Error::other(err.to_string())))?;
 
         let rules_for_thread = Arc::clone(&rules);
+        let precompiled_for_thread = Arc::clone(&precompiled);
         thread::spawn(move || {
             while let Ok(event_result) = event_rx.recv() {
                 match event_result {
@@ -50,6 +56,8 @@ impl RuleWatcher {
                         thread::sleep(Duration::from_millis(20));
                         match load_ruleset_from_path(&path) {
                             Ok(new_rules) => {
+                                precompiled_for_thread
+                                    .store(Arc::new(build_precompiled_map(&new_rules)));
                                 rules_for_thread.store(Arc::new(new_rules));
                             }
                             Err(err) => {
@@ -66,6 +74,7 @@ impl RuleWatcher {
 
         Ok(Self {
             rules,
+            precompiled_rules: precompiled,
             _watcher: watcher,
         })
     }
@@ -73,6 +82,24 @@ impl RuleWatcher {
     pub fn rules(&self) -> Arc<ArcSwap<RuleSet>> {
         Arc::clone(&self.rules)
     }
+
+    /// Snapshot of regexes compiled at rule load time (for introspection / tests).
+    pub fn precompiled_rules(&self) -> Arc<ArcSwap<HashMap<String, Regex>>> {
+        Arc::clone(&self.precompiled_rules)
+    }
+}
+
+/// One entry per rule id: prefers `process_name_pattern` over `cgroup_pattern` when both exist.
+fn build_precompiled_map(rules: &RuleSet) -> HashMap<String, Regex> {
+    let mut map = HashMap::new();
+    for rule in &rules.rules {
+        if let Some(rx) = &rule.process_name_regex {
+            map.insert(rule.id.clone(), rx.clone());
+        } else if let Some(rx) = &rule.cgroup_regex {
+            map.insert(rule.id.clone(), rx.clone());
+        }
+    }
+    map
 }
 
 pub fn load_ruleset_from_path(path: &Path) -> Result<RuleSet, RuleError> {

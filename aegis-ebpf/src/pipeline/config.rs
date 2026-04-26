@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::AlertCallback;
+use crate::{AlertCallback, StandardizedEventCallback};
 
 #[derive(Clone)]
 pub struct PipelineConfig {
@@ -11,6 +11,8 @@ pub struct PipelineConfig {
     pub state_window_ms: u64,
     pub rules_path: Option<PathBuf>,
     pub on_alert: Option<AlertCallback>,
+    /// Called after rule evaluation with `serde_json` of [`crate::StandardizedEvent`] (empty `matched_rules` if none).
+    pub on_standardized_event: Option<StandardizedEventCallback>,
 }
 
 impl Default for PipelineConfig {
@@ -23,6 +25,7 @@ impl Default for PipelineConfig {
             state_window_ms: 60_000,
             rules_path: None,
             on_alert: None,
+            on_standardized_event: None,
         }
     }
 }

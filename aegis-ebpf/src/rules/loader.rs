@@ -53,9 +53,10 @@ impl RuleSet {
     }
 
     pub fn from_yaml_str(yaml: &str) -> Result<Self, RuleError> {
-        let parsed: RuleFile = serde_yaml::from_str(yaml)?;
-        for rule in &parsed.rules {
+        let mut parsed: RuleFile = serde_yaml::from_str(yaml)?;
+        for rule in &mut parsed.rules {
             validate_rule(rule)?;
+            super::compile_rule_regexes(rule)?;
         }
         Ok(Self {
             rules: parsed.rules,

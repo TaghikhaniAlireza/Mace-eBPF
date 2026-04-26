@@ -208,6 +208,8 @@ mod tests {
                     min_mprotect_exec_count: Some(3),
                     min_rwx_bytes: None,
                 }),
+                cgroup_regex: None,
+                process_name_regex: None,
             }],
         };
 
@@ -248,6 +250,8 @@ mod tests {
                     min_mprotect_exec_count: None,
                     min_rwx_bytes: None,
                 }),
+                cgroup_regex: None,
+                process_name_regex: None,
             }],
         };
 
@@ -281,6 +285,8 @@ mod tests {
                     min_mprotect_exec_count: Some(3),
                     min_rwx_bytes: None,
                 }),
+                cgroup_regex: None,
+                process_name_regex: None,
             }],
         };
 

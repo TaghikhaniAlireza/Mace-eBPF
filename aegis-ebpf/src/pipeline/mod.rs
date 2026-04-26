@@ -19,7 +19,7 @@ use tracing::warn as tracing_warn;
 use crate::observability::otel::OtelExporter;
 use crate::{
     ContextEnricher, PodMetadata, SensorConfig,
-    alert::{Alert, AlertCallback},
+    alert::{Alert, AlertCallback, StandardizedEventCallback, build_standardized_event_from_rules},
     observability::metrics::{
         record_event_ingested as record_pipeline_event_ingested, record_pipeline_latency,
         update_reorder_buffer_size, update_worker_queue_depth,
@@ -194,6 +194,7 @@ fn spawn_pipeline_from_raw(
         channel_buffer_size,
         rules,
         pipeline_config.on_alert,
+        pipeline_config.on_standardized_event,
         pipeline_config.state_window_ms,
     ));
 
@@ -357,6 +358,7 @@ async fn run_partition_worker(
     worker_id: usize,
     rules: Arc<ArcSwap<RuleSet>>,
     on_alert: Option<AlertCallback>,
+    on_standardized_event: Option<StandardizedEventCallback>,
     state_window_ms: u64,
 ) {
     let mut state_tracker = StateTracker::new(state_window_ms);
@@ -397,6 +399,13 @@ async fn run_partition_worker(
             OtelExporter::record_rule_match(&mut pipe_span, "", false);
         }
 
+        if let Some(cb) = &on_standardized_event {
+            let std_ev = build_standardized_event_from_rules(&event, &matches);
+            if let Ok(json) = serde_json::to_string(&std_ev) {
+                cb(json).await;
+            }
+        }
+
         record_pipeline_latency(start.elapsed().as_nanos() as u64);
 
         #[cfg(feature = "otel")]
@@ -408,6 +417,7 @@ async fn run_partition_worker(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_partition_router(
     mut ordered_rx: mpsc::Receiver<EnrichedEvent>,
     final_tx: mpsc::Sender<EnrichedEvent>,
@@ -415,6 +425,7 @@ async fn run_partition_router(
     partition_buffer_size: usize,
     rules: Arc<ArcSwap<RuleSet>>,
     on_alert: Option<AlertCallback>,
+    on_standardized_event: Option<StandardizedEventCallback>,
     state_window_ms: u64,
 ) {
     let mut partition_txs = Vec::with_capacity(partition_count);
@@ -429,6 +440,7 @@ async fn run_partition_router(
             idx,
             Arc::clone(&rules),
             on_alert.clone(),
+            on_standardized_event.clone(),
             state_window_ms,
         )));
     }

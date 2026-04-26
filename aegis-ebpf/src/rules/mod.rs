@@ -9,6 +9,12 @@ use serde::Deserialize;
 
 use crate::{pipeline::EnrichedEvent, state::ProcessState};
 
+/// `comm` field from a [`MemoryEvent`](aegis_ebpf_common::MemoryEvent) as a lossy UTF-8 string.
+pub fn comm_to_process_name(comm: &[u8; aegis_ebpf_common::TASK_COMM_LEN]) -> String {
+    let end = comm.iter().position(|&b| b == 0).unwrap_or(comm.len());
+    String::from_utf8_lossy(&comm[..end]).into_owned()
+}
+
 pub const PROT_READ: u64 = 0x1;
 pub const PROT_WRITE: u64 = 0x2;
 pub const PROT_EXEC: u64 = 0x4;
@@ -23,6 +29,12 @@ pub struct Rule {
     pub conditions: Conditions,
     #[serde(default)]
     pub stateful: Option<StatefulConditions>,
+    /// Filled at load time from `conditions.cgroup_pattern` (never compile per event).
+    #[serde(skip)]
+    pub cgroup_regex: Option<Regex>,
+    /// Filled at load time from `conditions.process_name_pattern` (never compile per event).
+    #[serde(skip)]
+    pub process_name_regex: Option<Regex>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -43,6 +55,9 @@ pub struct Conditions {
     pub flags_excludes: Vec<String>,
     pub min_size: Option<u64>,
     pub cgroup_pattern: Option<String>,
+    /// Regex matched against the process `comm` (task name), e.g. `"^cat$"`.
+    #[serde(default)]
+    pub process_name_pattern: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -96,11 +111,15 @@ impl Rule {
             return false;
         }
 
-        if let Some(pattern) = self.conditions.cgroup_pattern.as_deref() {
-            let Some(path) = event_cgroup_path(event) else {
+        let process_name = comm_to_process_name(&event.inner.comm);
+        if let Some(regex) = &self.process_name_regex {
+            if !regex.is_match(&process_name) {
                 return false;
-            };
-            let Ok(regex) = Regex::new(pattern) else {
+            }
+        }
+
+        if let Some(regex) = &self.cgroup_regex {
+            let Some(path) = event_cgroup_path(event) else {
                 return false;
             };
             if !regex.is_match(&path) {
@@ -188,6 +207,30 @@ pub(crate) fn validate_rule(rule: &Rule) -> Result<(), RuleError> {
             RuleError::InvalidCondition(format!("invalid cgroup_pattern regex '{pattern}': {err}"))
         })?;
     }
+    if let Some(pattern) = rule.conditions.process_name_pattern.as_deref() {
+        Regex::new(pattern).map_err(|err| {
+            RuleError::InvalidCondition(format!(
+                "invalid process_name_pattern regex '{pattern}': {err}"
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+/// Compile regex fields on each rule after YAML parse. Call after `validate_rule` for each rule.
+pub(crate) fn compile_rule_regexes(rule: &mut Rule) -> Result<(), RuleError> {
+    rule.cgroup_regex = match rule.conditions.cgroup_pattern.as_deref() {
+        Some(p) => Some(Regex::new(p).map_err(|e| {
+            RuleError::InvalidCondition(format!("cgroup_pattern compile error: {e}"))
+        })?),
+        None => None,
+    };
+    rule.process_name_regex = match rule.conditions.process_name_pattern.as_deref() {
+        Some(p) => Some(Regex::new(p).map_err(|e| {
+            RuleError::InvalidCondition(format!("process_name_pattern compile error: {e}"))
+        })?),
+        None => None,
+    };
     Ok(())
 }
 
@@ -308,6 +351,8 @@ rules:
                 ..Default::default()
             },
             stateful: None,
+            cgroup_regex: None,
+            process_name_regex: None,
         };
         let mprotect_event = fake_enriched_event(EventType::MprotectWX, 0, 4096);
         let mmap_event = fake_enriched_event(EventType::Mmap, 0, 4096);
@@ -327,6 +372,8 @@ rules:
                 ..Default::default()
             },
             stateful: None,
+            cgroup_regex: None,
+            process_name_regex: None,
         };
 
         let match_event = fake_enriched_event(
@@ -351,6 +398,8 @@ rules:
                 ..Default::default()
             },
             stateful: None,
+            cgroup_regex: None,
+            process_name_regex: None,
         };
 
         let anonymous = fake_enriched_event(EventType::Mmap, MAP_ANONYMOUS | PROT_EXEC, 4096);
@@ -373,6 +422,8 @@ rules:
                         ..Default::default()
                     },
                     stateful: None,
+                    cgroup_regex: None,
+                    process_name_regex: None,
                 },
                 Rule {
                     id: "R2".into(),
@@ -384,6 +435,8 @@ rules:
                         ..Default::default()
                     },
                     stateful: None,
+                    cgroup_regex: None,
+                    process_name_regex: None,
                 },
                 Rule {
                     id: "R3".into(),
@@ -395,6 +448,8 @@ rules:
                         ..Default::default()
                     },
                     stateful: None,
+                    cgroup_regex: None,
+                    process_name_regex: None,
                 },
             ],
         };
@@ -507,5 +562,84 @@ rules:
             "expected rule-match warning in logs"
         );
         assert!(logs.contains("MEM-T1"), "expected matched rule id in logs");
+    }
+
+    #[test]
+    fn precompiled_regex_and_standardized_json_for_process_name() {
+        let yaml = r#"
+rules:
+  - id: "TEST_001"
+    name: "cat process"
+    severity: "high"
+    description: "match comm cat"
+    conditions:
+      syscall: "mmap"
+      process_name_pattern: "^cat$"
+"#;
+        let set = RuleSet::from_yaml_str(yaml).expect("yaml");
+        assert!(set.rules[0].process_name_regex.is_some());
+
+        let mut comm = [0u8; 16];
+        comm[..3].copy_from_slice(b"cat");
+
+        let ev = crate::EnrichedEvent {
+            inner: MemoryEvent {
+                timestamp_ns: 99,
+                tgid: 1,
+                pid: 2,
+                comm,
+                event_type: EventType::Mmap,
+                addr: 0x1000,
+                len: 4096,
+                flags: 0,
+                ret: 0,
+            },
+            metadata: None,
+        };
+
+        let matched = set.evaluate(&ev, None);
+        assert_eq!(matched.len(), 1);
+        assert_eq!(matched[0].id, "TEST_001");
+
+        let std_ev = crate::alert::build_standardized_event_from_rules(&ev, &matched);
+        assert_eq!(std_ev.matched_rules, vec!["TEST_001".to_string()]);
+        assert_eq!(std_ev.process_name, "cat");
+
+        let json = serde_json::to_string(&std_ev).expect("json");
+        assert!(
+            json.contains(r#""matched_rules":["TEST_001"]"#),
+            "unexpected json: {json}"
+        );
+    }
+
+    #[test]
+    fn rule_watcher_precompiled_map_contains_rule_id() {
+        let yaml = r#"
+rules:
+  - id: "TEST_001"
+    name: "cat process"
+    severity: "high"
+    description: "match comm cat"
+    conditions:
+      syscall: "mmap"
+      process_name_pattern: "^cat$"
+"#;
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("aegis-precompile-test-{unique}.yaml"));
+        fs::write(&path, yaml).expect("write yaml");
+
+        let watcher = super::watcher::RuleWatcher::new(path.clone()).expect("watcher");
+        let map = watcher.precompiled_rules().load();
+        assert!(
+            map.contains_key("TEST_001"),
+            "expected precompiled_rules to contain TEST_001, got keys: {:?}",
+            map.keys().collect::<Vec<_>>()
+        );
+        assert!(map["TEST_001"].is_match("cat"));
+
+        let _ = fs::remove_file(path);
     }
 }

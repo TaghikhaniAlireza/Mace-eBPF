@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
+use aegis_ebpf_common::EventType;
 use futures::future::BoxFuture;
+use serde::Serialize;
 
 use crate::{
     EnrichedEvent,
@@ -23,6 +25,66 @@ pub struct Alert {
 }
 
 pub type AlertCallback = Arc<dyn Fn(Alert) -> BoxFuture<'static, ()> + Send + Sync>;
+
+/// JSON line emitted once per event after rule evaluation (see [`crate::pipeline::StandardizedEvent`]).
+pub type StandardizedEventCallback = Arc<dyn Fn(String) -> BoxFuture<'static, ()> + Send + Sync>;
+
+/// JSON-serializable view of a syscall observation plus matched rule ids.
+#[derive(Serialize, Debug, Clone, Eq, PartialEq)]
+pub struct StandardizedEvent {
+    pub timestamp: u64,
+    pub pid: u32,
+    pub process_name: String,
+    pub syscall_name: String,
+    pub arguments: Vec<String>,
+    pub matched_rules: Vec<String>,
+}
+
+fn syscall_name_for_event(event_type: EventType) -> &'static str {
+    match event_type {
+        EventType::Mmap => "mmap",
+        EventType::MprotectWX => "mprotect",
+        EventType::MemfdCreate => "memfd_create",
+        EventType::Ptrace => "ptrace",
+    }
+}
+
+fn format_syscall_arguments(ev: &aegis_ebpf_common::MemoryEvent) -> Vec<String> {
+    vec![
+        format!("addr=0x{:x}", ev.addr),
+        format!("len=0x{:x}", ev.len),
+        format!("flags=0x{:x}", ev.flags),
+    ]
+}
+
+fn comm_string(comm: &[u8; aegis_ebpf_common::TASK_COMM_LEN]) -> String {
+    let end = comm.iter().position(|&b| b == 0).unwrap_or(comm.len());
+    String::from_utf8_lossy(&comm[..end]).into_owned()
+}
+
+/// Build [`StandardizedEvent`] from an enriched event and matched rule ids (stable JSON output).
+pub fn build_standardized_event(
+    ev: &EnrichedEvent,
+    matched_rule_ids: &[String],
+) -> StandardizedEvent {
+    StandardizedEvent {
+        timestamp: ev.inner.timestamp_ns,
+        pid: ev.inner.pid,
+        process_name: comm_string(&ev.inner.comm),
+        syscall_name: syscall_name_for_event(ev.inner.event_type).to_string(),
+        arguments: format_syscall_arguments(&ev.inner),
+        matched_rules: matched_rule_ids.to_vec(),
+    }
+}
+
+/// Convenience: build from matched [`Rule`] references.
+pub fn build_standardized_event_from_rules(
+    ev: &EnrichedEvent,
+    matched: &[&Rule],
+) -> StandardizedEvent {
+    let ids: Vec<String> = matched.iter().map(|r| r.id.clone()).collect();
+    build_standardized_event(ev, &ids)
+}
 
 impl Alert {
     pub fn from_rule_and_event(rule: &Rule, event: &EnrichedEvent) -> Self {
