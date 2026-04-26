@@ -33,6 +33,65 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  # Runs in parallel with `build-and-test` (no `needs:`). Add `needs: [lint-and-audit]` to
+  # `build-and-test` if you want lint to gate the matrix.
+  lint-and-audit:
+    name: Lint and audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust (clippy + rustfmt)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Install nightly Rust (rustfmt + build-std for aegis-ebpf build.rs)
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, rust-src
+
+      # Same toolchain inputs as `build-and-test` so `aegis-ebpf/build.rs` (prost, nested eBPF)
+      # can run under `cargo clippy`.
+      - name: Install eBPF and build dependencies
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang \
+            llvm \
+            libelf-dev \
+            zlib1g-dev \
+            linux-headers-generic \
+            "linux-headers-$(uname -r)" \
+            pkg-config \
+            build-essential \
+            protobuf-compiler
+
+      - name: Install bpf-linker
+        run: cargo install bpf-linker --version 0.10.3
+
+      - name: Cache Cargo home
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: lint-and-audit
+
+      - name: rustfmt (nightly)
+        run: cargo +nightly fmt --all -- --check
+
+      # Exclude `aegis-ebpf-ebpf`: `no_std` BPF crate, not clippy'd for the host target.
+      - name: clippy
+        run: cargo clippy --workspace --exclude aegis-ebpf-ebpf --all-targets -- -D warnings
+
+      # `cargo audit` consults the RustSec advisory DB (includes CVSS metadata where published).
+      # Prefer `cargo deny` + `deny.toml` for licenses/bans/yanking; there is no `deny.toml` yet.
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+
+      - name: cargo audit (dependencies)
+        run: cargo audit
+
   build-and-test:
     name: Build and test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
