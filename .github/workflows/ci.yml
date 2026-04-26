@@ -1,23 +1,23 @@
 # =============================================================================
 # Aegis-eBPF — Continuous Integration (main)
 # =============================================================================
-# Matrix: `runs-on` (GitHub-hosted Ubuntu → **host kernel** / verifier behavior)
-#        × `container` (**user-space** libc + toolchain: glibc Debian/Ubuntu/Fedora/Alma,
-#        musl Alpine).
+# `build-and-test` runs on a **matrix of GitHub-hosted Ubuntu images** so the same
+# pre-built CO-RE eBPF object is loaded under **different host kernels** (5.x / 6.x
+# depending on the runner image). User-space is always Ubuntu on these runners.
 #
-# The eBPF program is **CO-RE** (same BPF ELF across kernels); this matrix stress-tests
-# **load + verifier + ringbuf** on several host kernels while compiling/linking userspace and
-# running `cargo test` in diverse distros (package layouts, glibc vs musl, clang/llvm stacks).
+# **Fedora / AlmaLinux / other distros:** GitHub does not provide `runs-on: fedora-*` or
+# `almalinux-*` for standard hosted jobs. Use **self-hosted** runners with your own labels,
+# or the **Vagrant** matrix under `scripts/vm/`, if you need those userlands in CI.
 #
-# Containers run **privileged** so `BPF_PROG_LOAD` / tracepoint attach from tests work.
+# **`ubuntu-18.04`:** Retired for many organizations; it is omitted from the matrix below.
+# Uncomment the line in `matrix.os` if your plan still offers `ubuntu-18.04` runners.
 #
 # Notes:
-# - Do **not** use `cargo ... --all-features` on the whole workspace (see `aegis-ebpf-ebpf` /
-#   `ebpf-bin` / duplicate `panic_impl` on the host).
-# - `linux-headers-$(uname -r)` only applies cleanly on **Debian/apt**-based images where the
-#   host kernel package exists in apt; on Fedora/Alma/Alpine we install generic dev headers /
-#   libbpf dev packages (host `uname -r` does not match distro kernel packages).
-# - For **exact** kernel-version CO-RE matrices, still use `scripts/vm/` (Vagrant).
+# - Do **not** use `cargo ... --all-features` on the whole workspace: that enables
+#   `aegis-ebpf-ebpf/ebpf-bin`, which builds the `#!no_std` BPF binary for the host and hits
+#   `E0152` duplicate `panic_impl` with `std`.
+# - If `--include-ignored` eBPF tests become flaky on a future runner kernel, narrow or gate
+#   that step.
 # =============================================================================
 
 name: CI
@@ -34,100 +34,23 @@ env:
 
 jobs:
   build-and-test:
-    name: "${{ matrix.os }} × ${{ matrix.container }}"
+    name: Build and test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    container:
-      image: ${{ matrix.container }}
-      # BPF syscalls from non-init user namespaces often need privileged containers.
-      options: --privileged
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-20.04, ubuntu-22.04, ubuntu-24.04]
-        container:
-          - ubuntu:latest
-          - debian:bookworm
-          - fedora:latest
-          - almalinux:9
-          - alpine:latest
+        os:
+          # - ubuntu-18.04  # uncomment only if your GitHub plan still provides this runner
+          - ubuntu-20.04
+          - ubuntu-22.04
+          - ubuntu-24.04
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # --- Cross-distro bootstrap: curl/git/sudo + clang/llvm/elf/zlib + protobuf + headers
-      #     where applicable (apt / dnf / apk).
-      - name: Install OS packages (dynamic by /etc/os-release)
-        shell: bash
-        run: |
-          set -euxo pipefail
-          if [[ ! -f /etc/os-release ]]; then
-            echo "No /etc/os-release; cannot detect distro" >&2
-            exit 1
-          fi
-          # shellcheck source=/dev/null
-          source /etc/os-release
-
-          case "${ID:-unknown}" in
-            ubuntu|debian)
-              export DEBIAN_FRONTEND=noninteractive
-              apt-get update
-              apt-get install -y --no-install-recommends \
-                ca-certificates curl git sudo pkg-config \
-                build-essential clang llvm libelf-dev zlib1g-dev protobuf-compiler \
-                linux-libc-dev
-              # Best-effort: kernel UAPI headers matching the **host** kernel (visible in container).
-              if apt-get install -y --no-install-recommends "linux-headers-$(uname -r)" 2>/dev/null; then
-                echo "Installed linux-headers-$(uname -r)"
-              elif apt-get install -y --no-install-recommends linux-headers-generic 2>/dev/null; then
-                echo "Installed linux-headers-generic (fallback)"
-              else
-                echo "WARN: could not install matching linux-headers; continuing"
-              fi
-              # bpftool (virtual package on Debian/Ubuntu — pull via linux-tools-*).
-              KERN="$(uname -r)"
-              if apt-get install -y --no-install-recommends "linux-tools-${KERN}" 2>/dev/null; then
-                echo "Installed linux-tools-${KERN}"
-              elif apt-get install -y --no-install-recommends "linux-cloud-tools-${KERN}" 2>/dev/null; then
-                echo "Installed linux-cloud-tools-${KERN}"
-              else
-                echo "WARN: bpftool not installed (optional for this CI)"
-              fi
-              ;;
-            fedora)
-              dnf -y update
-              dnf -y install \
-                ca-certificates curl git sudo pkgconf-pkg-config \
-                gcc gcc-c++ make clang llvm elfutils-libelf-devel zlib-devel \
-                protobuf-compiler protobuf-devel \
-                kernel-headers kernel-devel || true
-              # kernel-devel often does not match GitHub's cloud kernel; ignore failure.
-              ;;
-            almalinux)
-              dnf -y install epel-release || true
-              dnf -y update
-              dnf -y install \
-                ca-certificates curl git sudo pkgconf-pkg-config \
-                gcc gcc-c++ make clang llvm elfutils-libelf-devel zlib-devel \
-                protobuf-compiler protobuf-devel \
-                kernel-headers kernel-devel || true
-              ;;
-            alpine)
-              apk update
-              apk add --no-cache \
-                ca-certificates curl git sudo bash build-base pkgconfig \
-                musl-dev linux-headers clang llvm lld \
-                elfutils-dev zlib-dev protobuf-dev protoc
-              ;;
-            *)
-              echo "Unsupported ID=${ID} from /etc/os-release" >&2
-              exit 1
-              ;;
-          esac
-
-          command -v bpftool && bpftool version || true
-
-      # --- Rust: stable + nightly + rust-src (eBPF build-std).
+      # --- Rust: stable is the primary host toolchain; nightly + rust-src is
+      #     required for `aya_build` / `-Z build-std` when compiling `aegis-ebpf-ebpf`.
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -138,40 +61,42 @@ jobs:
         with:
           components: rust-src
 
-      # --- Cache: distinguish matrix cells (host OS × user-space image).
+      # --- Cargo cache: registry + git dependencies + `target/` (speeds rebuilds).
       - name: Cache Cargo home and build artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "${{ matrix.os }}-${{ matrix.container }}"
+          shared-key: "${{ matrix.os }}"
 
-      # --- bpf-linker (nested eBPF link). LLVM prefix hints for distro LLVM layouts.
-      - name: Install bpf-linker
-        shell: bash
+      # --- Native packages: LLVM/clang, libelf/zlib, kernel UAPI headers.
+      #     `bpftool` is not a real package on Ubuntu — it is a virtual package satisfied by
+      #     `linux-tools-$(uname -r)` or `linux-cloud-tools-$(uname -r)`.
+      - name: Install eBPF and build dependencies
         run: |
           set -euxo pipefail
-          if [[ -f /etc/os-release ]]; then source /etc/os-release; fi
-          export LLVM_SYS_170_PREFIX=""
-          export LLVM_SYS_180_PREFIX=""
-          export LLVM_SYS_190_PREFIX=""
-          case "${ID:-}" in
-            ubuntu|debian)
-              if [[ -d /usr/lib/llvm-19 ]]; then export LLVM_SYS_190_PREFIX=/usr/lib/llvm-19
-              elif [[ -d /usr/lib/llvm-18 ]]; then export LLVM_SYS_180_PREFIX=/usr/lib/llvm-18
-              elif [[ -d /usr/lib/llvm-17 ]]; then export LLVM_SYS_170_PREFIX=/usr/lib/llvm-17
-              fi
-              ;;
-            fedora|almalinux)
-              if compgen -G "/usr/lib64/llvm19/lib" > /dev/null; then export LLVM_SYS_190_PREFIX=/usr/lib64/llvm19
-              elif compgen -G "/usr/lib64/llvm18/lib" > /dev/null; then export LLVM_SYS_180_PREFIX=/usr/lib64/llvm18
-              fi
-              ;;
-            alpine)
-              if [[ -d /usr/lib/llvm19 ]]; then export LLVM_SYS_190_PREFIX=/usr/lib/llvm19
-              elif [[ -d /usr/lib/llvm18 ]]; then export LLVM_SYS_180_PREFIX=/usr/lib/llvm18
-              fi
-              ;;
-          esac
-          cargo install bpf-linker --version 0.10.3
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang \
+            llvm \
+            libelf-dev \
+            zlib1g-dev \
+            linux-headers-generic \
+            "linux-headers-$(uname -r)" \
+            pkg-config \
+            build-essential \
+            protobuf-compiler
+          KERN="$(uname -r)"
+          if sudo apt-get install -y --no-install-recommends "linux-tools-${KERN}"; then
+            echo "Installed linux-tools-${KERN} (includes bpftool)"
+          elif sudo apt-get install -y --no-install-recommends "linux-cloud-tools-${KERN}"; then
+            echo "Installed linux-cloud-tools-${KERN} (includes bpftool)"
+          else
+            echo "WARNING: no linux-tools package for ${KERN}; bpftool unavailable (build still OK)"
+          fi
+          command -v bpftool && bpftool version || true
+
+      # --- bpf-linker: required by `aegis-ebpf-ebpf/build.rs` (undeclared binary dep).
+      - name: Install bpf-linker
+        run: cargo install bpf-linker --version 0.10.3
 
       - name: Build workspace
         run: cargo build --workspace --verbose
@@ -181,21 +106,12 @@ jobs:
           cargo build -p aegis-ebpf --features prometheus --verbose
           cargo test -p aegis-ebpf --features prometheus --test observability_integration --verbose
 
-      # --- Full test suite: `.cargo/linux-test-runner.sh` uses `sudo -E` for test binaries
-      #     so `cargo test` itself should still see rustup on PATH. Invoke under `sudo -E bash -lc`
-      #     when not root; call `cargo` directly when already root (containers often are).
-      - name: Run tests (privileged, full BPF suite)
-        shell: bash
+      - name: Run tests (sudo, full BPF suite)
         run: |
           set -euxo pipefail
-          export RUSTUP_HOME="${RUSTUP_HOME:-${HOME}/.rustup}"
-          export CARGO_HOME="${CARGO_HOME:-${HOME}/.cargo}"
-          TEST_CMD='cargo test --workspace --verbose -- --include-ignored'
-          if [[ "$(id -u)" -eq 0 ]]; then
-            bash -lc "$TEST_CMD"
-          elif command -v sudo >/dev/null 2>&1; then
-            sudo -E env "PATH=${PATH}" "HOME=${HOME}" "RUSTUP_HOME=${RUSTUP_HOME}" "CARGO_HOME=${CARGO_HOME}" \
-              bash -lc "$TEST_CMD"
-          else
-            bash -lc "$TEST_CMD"
-          fi
+          sudo -E env \
+            "PATH=${PATH}" \
+            "HOME=${HOME}" \
+            "RUSTUP_HOME=${RUSTUP_HOME:-${HOME}/.rustup}" \
+            "CARGO_HOME=${CARGO_HOME:-${HOME}/.cargo}" \
+            cargo test --workspace --verbose -- --include-ignored
