@@ -52,8 +52,10 @@ jobs:
       - name: Cache Cargo home and build artifacts
         uses: Swatinem/rust-cache@v2
 
-      # --- Native packages: LLVM/clang toolchain for libbpf headers + bpf-linker,
-      #     libelf/zlib for linking, kernel UAPI headers, bpftool for optional introspection.
+      # --- Native packages: LLVM/clang, libelf/zlib, kernel UAPI headers.
+      #     `bpftool` is not a real package on Ubuntu — it is a virtual package satisfied by
+      #     `linux-tools-$(uname -r)` (generic runners) or `linux-cloud-tools-$(uname -r)`
+      #     (some Azure/cloud images). Install one of those so `bpftool` exists on PATH.
       - name: Install eBPF and build dependencies
         run: |
           set -euxo pipefail
@@ -65,12 +67,20 @@ jobs:
             zlib1g-dev \
             linux-headers-generic \
             "linux-headers-$(uname -r)" \
-            bpftool \
             pkg-config \
             build-essential \
             protobuf-compiler
           # `linux-headers-generic` tracks the distro default; headers matching
           # `uname -r` are safest for BPF UAPI on the exact runner kernel.
+          KERN="$(uname -r)"
+          if sudo apt-get install -y --no-install-recommends "linux-tools-${KERN}"; then
+            echo "Installed linux-tools-${KERN} (includes bpftool)"
+          elif sudo apt-get install -y --no-install-recommends "linux-cloud-tools-${KERN}"; then
+            echo "Installed linux-cloud-tools-${KERN} (includes bpftool)"
+          else
+            echo "WARNING: no linux-tools package for ${KERN}; bpftool unavailable (build still OK)"
+          fi
+          command -v bpftool && bpftool version || true
 
       # --- bpf-linker: required by `aegis-ebpf-ebpf/build.rs` (undeclared binary dep).
       #     Installed to ~/.cargo/bin so nested `cargo` from `aya_build` can invoke it.
