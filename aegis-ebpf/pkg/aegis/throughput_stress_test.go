@@ -44,9 +44,13 @@ func TestHighThroughputJitStorm(t *testing.T) {
 	}
 }
 
-// TestHighThroughputConcurrentDrain exercises the same arena from Go while a background goroutine
-// drains (optional extra contention on top of the Rust-only storm path).
-func TestHighThroughputConcurrentDrain(t *testing.T) {
+// TestHighThroughputJitStormSmallerArena runs the same Rust-side storm with a smaller ring.
+//
+// Do **not** call TryPop/TryPush on this arena from another goroutine while SimulateJitStorm runs:
+// the Rust simulator is SPSC (one internal producer, one internal consumer) and its completion
+// is based on an internal pop count. External pops steal events without updating that count, so
+// the Rust consumer can spin forever (until the 10m Go test timeout).
+func TestHighThroughputJitStormSmallerArena(t *testing.T) {
 	const count uint32 = 50_000
 
 	a, err := aegis.NewArena(32768)
@@ -55,26 +59,12 @@ func TestHighThroughputConcurrentDrain(t *testing.T) {
 	}
 	defer a.Close()
 
-	done := make(chan struct{})
-	go func() {
-		for {
-			select {
-			case <-done:
-				return
-			default:
-			}
-			_, _ = a.TryPop()
-		}
-	}()
-
 	stats, elapsed, err := a.SimulateJitStormDuration(count)
-	close(done)
-
 	if err != nil {
 		t.Fatalf("SimulateJitStorm: %v", err)
 	}
 	if stats.Pushed != stats.Requested || stats.Popped != stats.Requested {
 		t.Fatalf("counts pushed=%d popped=%d requested=%d", stats.Pushed, stats.Popped, stats.Requested)
 	}
-	t.Logf("concurrent_drain storm: %v, full_retries=%d", elapsed, stats.FullRetries)
+	t.Logf("jit_storm (32k cap): %v, full_retries=%d", elapsed, stats.FullRetries)
 }
