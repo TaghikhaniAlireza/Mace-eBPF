@@ -1,5 +1,8 @@
 # Validation rules for Phase 2.2 attack simulations (`tests/simulations/attack_simulator.py`).
-# Load this file into the Aegis pipeline (or point `rules_path` here) while the sensor is running as root.
+# Load this file into the Aegis pipeline while the sensor runs as root.
+#
+# Note: `attack_simulator.py` is often run with `sudo`, so syscalls from that process show uid=0.
+# Rules that should match the simulator therefore use uid: 0 where needed, or omit `uid` to match any user.
 
 rules:
   - id: "SIM_A_RWX"
@@ -18,6 +21,16 @@ rules:
       syscall: "execve"
       argv_contains:
         - "malicious_payload"
+
+  # Matches `cat /etc/shadow` whether run as root (simulator) or as a normal user: no uid filter.
+  - id: "SIM_C_SHADOW_EXEC"
+    name: "Sensitive read via shell (execve cmdline)"
+    severity: "critical"
+    description: "Detect execve whose captured argv contains cat and /etc/shadow (covers `sh -c 'cat ...'`)."
+    conditions:
+      syscall: "execve"
+      cmdline_contains_any:
+        - "cat /etc/shadow"
 
   - id: "SIM_C_SHADOW_OPEN"
     name: "Sensitive file open (openat)"

@@ -39,8 +39,8 @@ func main() {
 	}
 
 	if err := aegis.RegisterEventCallback(func(ev aegis.StandardizedEvent) {
-		fmt.Printf("ALERT rules=%v syscall=%s pid=%d uid=%d comm=%q cmdline=%q args=%v ts=%d\n",
-			ev.MatchedRules, ev.SyscallName, ev.PID, ev.UID, ev.ProcessName, ev.Cmdline, ev.Arguments, ev.Timestamp)
+		fmt.Printf("ALERT rules=%v syscall=%s pid=%d uid=%d user=%q comm=%q cmdline=%q args=%v ts=%d\n",
+			ev.MatchedRules, ev.SyscallName, ev.PID, ev.UID, ev.Username, ev.ProcessName, ev.Cmdline, ev.Arguments, ev.Timestamp)
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

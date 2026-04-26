@@ -35,9 +35,11 @@ pub struct StandardizedEvent {
     pub timestamp: u64,
     pub pid: u32,
     pub uid: u32,
+    /// Login name from `/etc/passwd` for `uid`, when resolvable.
+    pub username: String,
     pub process_name: String,
     pub syscall_name: String,
-    /// Best-effort command line for `execve` (from eBPF argv snapshot); empty for other syscalls.
+    /// Execve argv snapshot, or last known execve line for this TGID (for mmap/openat/… context).
     pub cmdline: String,
     pub arguments: Vec<String>,
     pub matched_rules: Vec<String>,
@@ -94,13 +96,21 @@ pub fn build_standardized_event(
     ev: &EnrichedEvent,
     matched_rule_ids: &[String],
 ) -> StandardizedEvent {
+    let cmdline = if !ev.inner.execve_cmdline.is_empty() {
+        ev.inner.execve_cmdline.clone()
+    } else {
+        ev.cmdline_context.clone().unwrap_or_default()
+    };
+    let username = ev.username.clone().unwrap_or_default();
+
     StandardizedEvent {
         timestamp: ev.inner.timestamp_ns,
         pid: ev.inner.pid,
         uid: ev.inner.uid,
+        username,
         process_name: comm_string(&ev.inner.comm),
         syscall_name: syscall_name_for_event(ev.inner.event_type).to_string(),
-        cmdline: ev.inner.execve_cmdline.clone(),
+        cmdline,
         arguments: format_syscall_arguments(&ev.inner),
         matched_rules: matched_rule_ids.to_vec(),
     }

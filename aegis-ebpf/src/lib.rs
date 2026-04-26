@@ -9,9 +9,11 @@ use std::{
 };
 
 pub mod alert;
+pub mod cmdline_context;
 pub mod enrichment;
 pub mod ffi;
 pub mod observability;
+pub mod passwd;
 pub mod pipeline;
 pub mod proto;
 pub mod rules;

@@ -3,7 +3,7 @@ use std::{
     collections::BinaryHeap,
     error::Error,
     fmt,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -20,6 +20,7 @@ use crate::observability::otel::OtelExporter;
 use crate::{
     ContextEnricher, PodMetadata, SensorConfig,
     alert::{Alert, AlertCallback, StandardizedEventCallback, build_standardized_event_from_rules},
+    cmdline_context::CmdlineContextTracker,
     observability::metrics::{
         record_event_ingested as record_pipeline_event_ingested, record_pipeline_latency,
         update_reorder_buffer_size, update_worker_queue_depth,
@@ -37,6 +38,10 @@ const HEAP_CAPACITY_LIMIT: usize = 1024;
 pub struct EnrichedEvent {
     pub inner: MemoryEvent,
     pub metadata: Option<PodMetadata>,
+    /// Latest non-empty execve argv snapshot for this TGID (for attributing mmap/openat/mprotect).
+    pub cmdline_context: Option<String>,
+    /// Resolved from `/etc/passwd` for `inner.uid` (best-effort).
+    pub username: Option<String>,
 }
 
 impl Ord for EnrichedEvent {
@@ -187,11 +192,15 @@ fn spawn_pipeline_from_raw(
     let (final_tx, final_rx) = mpsc::channel(channel_buffer_size);
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
+    let cmdline_ttl_ns = pipeline_config.state_window_ms.saturating_mul(1_000_000);
+    let cmdline_tracker = Mutex::new(CmdlineContextTracker::new(cmdline_ttl_ns));
+
     tokio::spawn(run_enrichment_worker(
         raw_rx,
         enriched_tx,
         enricher,
         shutdown_rx,
+        cmdline_tracker,
     ));
     tokio::spawn(run_reorder_task(
         enriched_rx,
@@ -222,6 +231,7 @@ async fn run_enrichment_worker(
     enriched_tx: mpsc::Sender<EnrichedEvent>,
     enricher: Arc<dyn ContextEnricher>,
     mut shutdown_rx: oneshot::Receiver<()>,
+    cmdline_tracker: Mutex<CmdlineContextTracker>,
 ) {
     let mut shutdown_requested = false;
     loop {
@@ -229,7 +239,7 @@ async fn run_enrichment_worker(
             match raw_rx.try_recv() {
                 Ok(event) => {
                     record_pipeline_event_ingested();
-                    if send_enriched_event(event, &enriched_tx, enricher.as_ref())
+                    if send_enriched_event(event, &enriched_tx, enricher.as_ref(), &cmdline_tracker)
                         .await
                         .is_err()
                     {
@@ -246,7 +256,10 @@ async fn run_enrichment_worker(
             maybe_event = raw_rx.recv() => {
                 let Some(event) = maybe_event else { return };
                 record_pipeline_event_ingested();
-                if send_enriched_event(event, &enriched_tx, enricher.as_ref()).await.is_err() {
+                if send_enriched_event(event, &enriched_tx, enricher.as_ref(), &cmdline_tracker)
+                    .await
+                    .is_err()
+                {
                     return;
                 }
             }
@@ -261,6 +274,7 @@ async fn send_enriched_event(
     event: MemoryEvent,
     enriched_tx: &mpsc::Sender<EnrichedEvent>,
     enricher: &dyn ContextEnricher,
+    cmdline_tracker: &Mutex<CmdlineContextTracker>,
 ) -> Result<(), ()> {
     // cgroup_id is not yet present in MemoryEvent in this workspace,
     // so use tgid as the current enrichment key placeholder.
@@ -273,9 +287,17 @@ async fn send_enriched_event(
         }
     };
 
+    let cmdline_context = cmdline_tracker
+        .lock()
+        .expect("cmdline context mutex poisoned")
+        .observe(&event);
+    let username = crate::passwd::username_for_uid(event.uid);
+
     let enriched = EnrichedEvent {
         inner: event,
         metadata,
+        cmdline_context,
+        username,
     };
     enriched_tx.send(enriched).await.map_err(|_| ())
 }

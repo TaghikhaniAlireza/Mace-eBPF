@@ -41,6 +41,9 @@ pub struct Rule {
     /// Filled at load time from `conditions.pathname_pattern` for `openat` rules.
     #[serde(skip)]
     pub pathname_regex: Option<Regex>,
+    /// Regex against inherited / current exec command line (execve snapshot or `cmdline_context` on later syscalls).
+    #[serde(skip)]
+    pub cmdline_context_regex: Option<Regex>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -76,6 +79,9 @@ pub struct Conditions {
     /// Regex matched against the resolved pathname for `syscall: openat` (via `process_vm_readv` on the tracee).
     #[serde(default)]
     pub pathname_pattern: Option<String>,
+    /// Regex matched against the command-line haystack (`execve_cmdline` or inherited `cmdline_context` from the pipeline).
+    #[serde(default)]
+    pub cmdline_context_pattern: Option<String>,
     /// Optional `ptrace` request number (e.g. 16 for `PTRACE_ATTACH`); if set, must equal `event.flags`.
     #[serde(default)]
     pub ptrace_request: Option<u64>,
@@ -155,10 +161,7 @@ impl Rule {
         }
 
         if !self.conditions.argv_contains.is_empty() {
-            if event.inner.event_type != EventType::Execve {
-                return false;
-            }
-            let Some(cmdline) = execve_cmdline_haystack(event) else {
+            let Some(cmdline) = rule_cmdline_haystack(event) else {
                 return false;
             };
             if !self
@@ -172,10 +175,7 @@ impl Rule {
         }
 
         if !self.conditions.cmdline_contains_any.is_empty() {
-            if event.inner.event_type != EventType::Execve {
-                return false;
-            }
-            let Some(cmdline) = execve_cmdline_haystack(event) else {
+            let Some(cmdline) = rule_cmdline_haystack(event) else {
                 return false;
             };
             if !self
@@ -184,6 +184,15 @@ impl Rule {
                 .iter()
                 .any(|needle| cmdline.contains(needle.as_str()))
             {
+                return false;
+            }
+        }
+
+        if let Some(rx) = &self.cmdline_context_regex {
+            let Some(cmdline) = rule_cmdline_haystack(event) else {
+                return false;
+            };
+            if !rx.is_match(&cmdline) {
                 return false;
             }
         }
@@ -280,33 +289,8 @@ pub(crate) fn validate_rule(rule: &Rule) -> Result<(), RuleError> {
         )));
     }
 
-    if !rule.conditions.argv_contains.is_empty() {
-        let ok = rule
-            .conditions
-            .syscall
-            .as_deref()
-            .map(|s| s.eq_ignore_ascii_case("execve"))
-            .unwrap_or(false);
-        if !ok {
-            return Err(RuleError::InvalidCondition(
-                "argv_contains requires syscall: execve".into(),
-            ));
-        }
-    }
-
-    if !rule.conditions.cmdline_contains_any.is_empty() {
-        let ok = rule
-            .conditions
-            .syscall
-            .as_deref()
-            .map(|s| s.eq_ignore_ascii_case("execve"))
-            .unwrap_or(false);
-        if !ok {
-            return Err(RuleError::InvalidCondition(
-                "cmdline_contains_any requires syscall: execve".into(),
-            ));
-        }
-    }
+    // `argv_contains` / `cmdline_contains_any` apply to the command-line haystack (execve snapshot
+    // or inherited context for mmap/openat/…); any `syscall:` is allowed.
 
     if rule.conditions.pathname_pattern.is_some() {
         let ok = rule
@@ -361,6 +345,13 @@ pub(crate) fn validate_rule(rule: &Rule) -> Result<(), RuleError> {
             ))
         })?;
     }
+    if let Some(pattern) = rule.conditions.cmdline_context_pattern.as_deref() {
+        Regex::new(pattern).map_err(|err| {
+            RuleError::InvalidCondition(format!(
+                "invalid cmdline_context_pattern regex '{pattern}': {err}"
+            ))
+        })?;
+    }
     Ok(())
 }
 
@@ -381,6 +372,12 @@ pub(crate) fn compile_rule_regexes(rule: &mut Rule) -> Result<(), RuleError> {
     rule.pathname_regex = match rule.conditions.pathname_pattern.as_deref() {
         Some(p) => Some(Regex::new(p).map_err(|e| {
             RuleError::InvalidCondition(format!("pathname_pattern compile error: {e}"))
+        })?),
+        None => None,
+    };
+    rule.cmdline_context_regex = match rule.conditions.cmdline_context_pattern.as_deref() {
+        Some(p) => Some(Regex::new(p).map_err(|e| {
+            RuleError::InvalidCondition(format!("cmdline_context_pattern compile error: {e}"))
         })?),
         None => None,
     };
@@ -414,9 +411,14 @@ fn is_supported_syscall(syscall: &str) -> bool {
     )
 }
 
-fn execve_cmdline_haystack(event: &EnrichedEvent) -> Option<String> {
+fn rule_cmdline_haystack(event: &EnrichedEvent) -> Option<String> {
     if !event.inner.execve_cmdline.is_empty() {
         return Some(event.inner.execve_cmdline.clone());
+    }
+    if let Some(ctx) = &event.cmdline_context {
+        if !ctx.is_empty() {
+            return Some(ctx.clone());
+        }
     }
     read_proc_cmdline_flat(event.inner.pid)
 }
@@ -532,6 +534,8 @@ mod tests {
                 execve_cmdline: String::new(),
             },
             metadata: None,
+            cmdline_context: None,
+            username: None,
         }
     }
 
@@ -555,6 +559,31 @@ rules:
     }
 
     #[test]
+    fn argv_contains_matches_mmap_when_cmdline_context_set() {
+        let rule = Rule {
+            id: "CTX-MMAP".into(),
+            name: "mmap after bad exec".into(),
+            severity: Severity::High,
+            description: "desc".into(),
+            conditions: Conditions {
+                syscall: Some("mmap".into()),
+                argv_contains: vec!["evil".into()],
+                ..Default::default()
+            },
+            stateful: None,
+            cgroup_regex: None,
+            process_name_regex: None,
+            pathname_regex: None,
+            cmdline_context_regex: None,
+        };
+        let mut ev = fake_enriched_event(EventType::Mmap, 0, 4096);
+        ev.cmdline_context = Some("/bin/evil.sh".into());
+        assert!(rule.matches(&ev));
+        ev.cmdline_context = None;
+        assert!(!rule.matches(&ev));
+    }
+
+    #[test]
     fn uid_and_cmdline_contains_any_for_execve() {
         let rule = Rule {
             id: "R-UID-CMD".into(),
@@ -571,6 +600,7 @@ rules:
             cgroup_regex: None,
             process_name_regex: None,
             pathname_regex: None,
+            cmdline_context_regex: None,
         };
         let mut ev = fake_enriched_event(EventType::Execve, 0, 0);
         ev.inner.uid = 0;
@@ -600,6 +630,7 @@ rules:
             cgroup_regex: None,
             process_name_regex: None,
             pathname_regex: None,
+            cmdline_context_regex: None,
         };
         let mprotect_event = fake_enriched_event(EventType::MprotectWX, 0, 4096);
         let mmap_event = fake_enriched_event(EventType::Mmap, 0, 4096);
@@ -622,6 +653,7 @@ rules:
             cgroup_regex: None,
             process_name_regex: None,
             pathname_regex: None,
+            cmdline_context_regex: None,
         };
 
         let match_event = fake_enriched_event(
@@ -649,6 +681,7 @@ rules:
             cgroup_regex: None,
             process_name_regex: None,
             pathname_regex: None,
+            cmdline_context_regex: None,
         };
 
         let anonymous = fake_enriched_event(EventType::Mmap, MAP_ANONYMOUS | PROT_EXEC, 4096);
@@ -674,6 +707,7 @@ rules:
                     cgroup_regex: None,
                     process_name_regex: None,
                     pathname_regex: None,
+                    cmdline_context_regex: None,
                 },
                 Rule {
                     id: "R2".into(),
@@ -688,6 +722,7 @@ rules:
                     cgroup_regex: None,
                     process_name_regex: None,
                     pathname_regex: None,
+                    cmdline_context_regex: None,
                 },
                 Rule {
                     id: "R3".into(),
@@ -702,6 +737,7 @@ rules:
                     cgroup_regex: None,
                     process_name_regex: None,
                     pathname_regex: None,
+                    cmdline_context_regex: None,
                 },
             ],
         };
@@ -851,6 +887,8 @@ rules:
                 execve_cmdline: String::new(),
             },
             metadata: None,
+            cmdline_context: None,
+            username: None,
         };
 
         let matched = set.evaluate(&ev, None);

@@ -6,6 +6,7 @@ type StandardizedEvent struct {
 	Timestamp    uint64   `json:"timestamp"`
 	PID          uint32   `json:"pid"`
 	UID          uint32   `json:"uid"`
+	Username     string   `json:"username"`
 	ProcessName  string   `json:"process_name"`
 	SyscallName  string   `json:"syscall_name"`
 	Cmdline      string   `json:"cmdline"`

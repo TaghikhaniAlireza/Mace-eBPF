@@ -89,7 +89,7 @@ impl RuleWatcher {
     }
 }
 
-/// One entry per rule id: prefers `process_name_pattern`, then `cgroup_pattern`, then `pathname_pattern`.
+/// One entry per rule id: prefers `process_name_pattern`, then `cgroup_pattern`, then `pathname_pattern`, then `cmdline_context_pattern`.
 fn build_precompiled_map(rules: &RuleSet) -> HashMap<String, Regex> {
     let mut map = HashMap::new();
     for rule in &rules.rules {
@@ -98,6 +98,8 @@ fn build_precompiled_map(rules: &RuleSet) -> HashMap<String, Regex> {
         } else if let Some(rx) = &rule.cgroup_regex {
             map.insert(rule.id.clone(), rx.clone());
         } else if let Some(rx) = &rule.pathname_regex {
+            map.insert(rule.id.clone(), rx.clone());
+        } else if let Some(rx) = &rule.cmdline_context_regex {
             map.insert(rule.id.clone(), rx.clone());
         }
     }

@@ -121,6 +121,8 @@ mod tests {
                 execve_cmdline: String::new(),
             },
             metadata: None,
+            cmdline_context: None,
+            username: None,
         }
     }
 
@@ -213,6 +215,7 @@ mod tests {
                 cgroup_regex: None,
                 process_name_regex: None,
                 pathname_regex: None,
+                cmdline_context_regex: None,
             }],
         };
 
@@ -256,6 +259,7 @@ mod tests {
                 cgroup_regex: None,
                 process_name_regex: None,
                 pathname_regex: None,
+                cmdline_context_regex: None,
             }],
         };
 
@@ -292,6 +296,7 @@ mod tests {
                 cgroup_regex: None,
                 process_name_regex: None,
                 pathname_regex: None,
+                cmdline_context_regex: None,
             }],
         };
 
