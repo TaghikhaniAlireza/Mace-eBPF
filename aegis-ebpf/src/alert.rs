@@ -47,15 +47,32 @@ fn syscall_name_for_event(event_type: EventType) -> &'static str {
         EventType::MemfdCreate => "memfd_create",
         EventType::Ptrace => "ptrace",
         EventType::Execve => "execve",
+        EventType::Openat => "openat",
     }
 }
 
 fn format_syscall_arguments(ev: &aegis_ebpf_common::MemoryEvent) -> Vec<String> {
-    vec![
-        format!("addr=0x{:x}", ev.addr),
-        format!("len=0x{:x}", ev.len),
-        format!("flags=0x{:x}", ev.flags),
-    ]
+    match ev.event_type {
+        EventType::Ptrace => vec![
+            format!("request=0x{:x}", ev.flags),
+            format!("target_pid={}", ev.len),
+            format!("data_ptr=0x{:x}", ev.addr),
+        ],
+        EventType::Execve => vec![
+            format!("filename_ptr=0x{:x}", ev.addr),
+            format!("argv_ptr=0x{:x}", ev.len),
+        ],
+        EventType::Openat => vec![
+            format!("pathname_ptr=0x{:x}", ev.addr),
+            format!("open_flags=0x{:x}", ev.len),
+            format!("dirfd={}", ev.flags as i64),
+        ],
+        _ => vec![
+            format!("addr=0x{:x}", ev.addr),
+            format!("len=0x{:x}", ev.len),
+            format!("flags=0x{:x}", ev.flags),
+        ],
+    }
 }
 
 fn comm_string(comm: &[u8; aegis_ebpf_common::TASK_COMM_LEN]) -> String {

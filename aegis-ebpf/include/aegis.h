@@ -18,6 +18,9 @@
 
 #define MAP_ANONYMOUS 32
 
+// Linux `PTRACE_ATTACH` (used for rule matching on ptrace events).
+#define PTRACE_ATTACH 16
+
 // Error codes returned by FFI functions.
 // Negative values indicate errors, 0 indicates success.
 enum AegisErrorCode {

@@ -11,6 +11,7 @@ pub enum MemorySyscall {
     MemfdCreate = 3,
     Ptrace = 4,
     Execve = 5,
+    Openat = 6,
 }
 
 impl MemorySyscall {
@@ -21,6 +22,7 @@ impl MemorySyscall {
             3 => Some(Self::MemfdCreate),
             4 => Some(Self::Ptrace),
             5 => Some(Self::Execve),
+            6 => Some(Self::Openat),
             _ => None,
         }
     }
@@ -32,6 +34,7 @@ impl MemorySyscall {
             Self::MemfdCreate => "memfd_create",
             Self::Ptrace => "ptrace",
             Self::Execve => "execve",
+            Self::Openat => "openat",
         }
     }
 }
@@ -70,6 +73,7 @@ pub enum EventType {
     MemfdCreate = 2,
     Ptrace = 3,
     Execve = 4,
+    Openat = 5,
 }
 
 impl EventType {
@@ -80,6 +84,7 @@ impl EventType {
             3 => Some(Self::MemfdCreate),
             4 => Some(Self::Ptrace),
             5 => Some(Self::Execve),
+            6 => Some(Self::Openat),
             _ => None,
         }
     }
@@ -109,13 +114,16 @@ impl MemoryEvent {
         let raw = KernelMemoryEvent::from_bytes(bytes)?;
         let event_type = EventType::from_syscall(raw.syscall)?;
 
-        let (addr, len, flags) = match event_type {
-            EventType::Mmap => (raw.args[0], raw.args[1], raw.args[3]),
-            EventType::MprotectWX => (raw.args[0], raw.args[1], raw.args[2]),
-            EventType::MemfdCreate => (raw.args[0], 0, raw.args[1]),
-            EventType::Ptrace => (raw.args[2], 0, raw.args[0]),
+        let (addr, len, flags, ret) = match event_type {
+            EventType::Mmap => (raw.args[0], raw.args[1], raw.args[3], 0),
+            EventType::MprotectWX => (raw.args[0], raw.args[1], raw.args[2], 0),
+            EventType::MemfdCreate => (raw.args[0], 0, raw.args[1], 0),
+            // ptrace: request = args[0], target pid = args[1], data ptr = args[2]
+            EventType::Ptrace => (raw.args[2], raw.args[1], raw.args[0], 0),
             // execve: filename userspace pointer, argv pointer (userspace rules may read /proc/pid/cmdline)
-            EventType::Execve => (raw.args[0], raw.args[1], 0),
+            EventType::Execve => (raw.args[0], raw.args[1], 0, 0),
+            // openat: dfd, pathname user pointer, flags; fd returned on exit (stored in raw by userspace bridge if needed)
+            EventType::Openat => (raw.args[1], raw.args[2], raw.args[0], 0),
         };
 
         Some(Self {
@@ -127,7 +135,7 @@ impl MemoryEvent {
             addr,
             len,
             flags,
-            ret: 0,
+            ret,
         })
     }
 }
@@ -175,7 +183,7 @@ mod tests {
 
     // --- MemorySyscall ---
 
-    /// Validates that `MemorySyscall::from_u32` accepts syscall ids 1–4 and maps them to the expected variants.
+    /// Validates that `MemorySyscall::from_u32` accepts syscall ids 1–6 and maps them to the expected variants.
     #[test]
     fn memory_syscall_from_u32_valid_ids() {
         assert_eq!(MemorySyscall::from_u32(1), Some(MemorySyscall::Mmap));
@@ -183,13 +191,14 @@ mod tests {
         assert_eq!(MemorySyscall::from_u32(3), Some(MemorySyscall::MemfdCreate));
         assert_eq!(MemorySyscall::from_u32(4), Some(MemorySyscall::Ptrace));
         assert_eq!(MemorySyscall::from_u32(5), Some(MemorySyscall::Execve));
+        assert_eq!(MemorySyscall::from_u32(6), Some(MemorySyscall::Openat));
     }
 
-    /// Validates that `MemorySyscall::from_u32` returns `None` for out-of-range ids (0, 6, u32::MAX).
+    /// Validates that `MemorySyscall::from_u32` returns `None` for out-of-range ids (0, 7, u32::MAX).
     #[test]
     fn memory_syscall_from_u32_invalid_ids() {
         assert_eq!(MemorySyscall::from_u32(0), None);
-        assert_eq!(MemorySyscall::from_u32(6), None);
+        assert_eq!(MemorySyscall::from_u32(7), None);
         assert_eq!(MemorySyscall::from_u32(u32::MAX), None);
     }
 
@@ -201,11 +210,12 @@ mod tests {
         assert_eq!(MemorySyscall::MemfdCreate.as_str(), "memfd_create");
         assert_eq!(MemorySyscall::Ptrace.as_str(), "ptrace");
         assert_eq!(MemorySyscall::Execve.as_str(), "execve");
+        assert_eq!(MemorySyscall::Openat.as_str(), "openat");
     }
 
     // --- EventType ---
 
-    /// Validates that `EventType::from_syscall` maps raw syscall ids 1–4 to the high-level event kinds used in userspace.
+    /// Validates that `EventType::from_syscall` maps raw syscall ids 1–6 to the high-level event kinds used in userspace.
     #[test]
     fn event_type_from_syscall_valid() {
         assert_eq!(EventType::from_syscall(1), Some(EventType::Mmap));
@@ -213,13 +223,14 @@ mod tests {
         assert_eq!(EventType::from_syscall(3), Some(EventType::MemfdCreate));
         assert_eq!(EventType::from_syscall(4), Some(EventType::Ptrace));
         assert_eq!(EventType::from_syscall(5), Some(EventType::Execve));
+        assert_eq!(EventType::from_syscall(6), Some(EventType::Openat));
     }
 
     /// Validates that `EventType::from_syscall` returns `None` for unknown syscall ids.
     #[test]
     fn event_type_from_syscall_invalid() {
         assert_eq!(EventType::from_syscall(0), None);
-        assert_eq!(EventType::from_syscall(6), None);
+        assert_eq!(EventType::from_syscall(7), None);
         assert_eq!(EventType::from_syscall(u32::MAX), None);
     }
 
@@ -359,16 +370,28 @@ mod tests {
             assert_eq!(ev.flags, 0x444);
         }
 
-        /// Validates that ptrace syscall maps `args[2]` to addr, `args[0]` to flags, and len is zero.
+        /// Validates that ptrace syscall maps request=`args[0]`, target pid=`args[1]`, data ptr=`args[2]` into flags/len/addr.
         #[test]
         fn memory_event_ptrace_field_mapping() {
-            let raw = raw_with_syscall(4, [0x99, 0, 0xDEAD, 0, 0, 0]);
+            let raw = raw_with_syscall(4, [0x99, 0x55, 0xDEAD, 0, 0, 0]);
             let bytes = super::kernel_memory_event_to_bytes(&raw);
             let ev = MemoryEvent::from_bytes(&bytes).expect("ptrace should parse");
             assert_eq!(ev.event_type, EventType::Ptrace);
             assert_eq!(ev.addr, 0xDEAD);
-            assert_eq!(ev.len, 0);
+            assert_eq!(ev.len, 0x55);
             assert_eq!(ev.flags, 0x99);
+        }
+
+        /// Validates openat syscall maps pathname ptr, flags, and dirfd into addr/len/flags.
+        #[test]
+        fn memory_event_openat_field_mapping() {
+            let raw = raw_with_syscall(6, [(-100i64) as u64, 0x7000, 0x8000, 0, 0, 0]);
+            let bytes = super::kernel_memory_event_to_bytes(&raw);
+            let ev = MemoryEvent::from_bytes(&bytes).expect("openat should parse");
+            assert_eq!(ev.event_type, EventType::Openat);
+            assert_eq!(ev.addr, 0x7000);
+            assert_eq!(ev.len, 0x8000);
+            assert_eq!(ev.flags, (-100i64) as u64); // AT_FDCWD (sign-extended in register)
         }
 
         /// Validates that an unknown syscall id yields `None` from `MemoryEvent::from_bytes`.

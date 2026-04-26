@@ -1,0 +1,36 @@
+# Validation rules for Phase 2.2 attack simulations (`tests/simulations/attack_simulator.py`).
+# Load this file into the Aegis pipeline (or point `rules_path` here) while the sensor is running as root.
+
+rules:
+  - id: "SIM_A_RWX"
+    name: "Anonymous RWX via mprotect"
+    severity: "high"
+    description: "Detect transition to PROT_READ|PROT_WRITE|PROT_EXEC on memory (JIT-style shellcode staging)."
+    conditions:
+      syscall: "mprotect"
+      flags_contains: ["PROT_EXEC", "PROT_WRITE"]
+
+  - id: "SIM_B_TMP_EXEC"
+    name: "Execution from /tmp copy"
+    severity: "high"
+    description: "Detect execve where argv references the simulated payload copied under /tmp."
+    conditions:
+      syscall: "execve"
+      argv_contains:
+        - "malicious_payload"
+
+  - id: "SIM_C_SHADOW_OPEN"
+    name: "Sensitive file open (openat)"
+    severity: "critical"
+    description: "Detect openat resolving to /etc/shadow (path resolved in user-space via process_vm_readv)."
+    conditions:
+      syscall: "openat"
+      pathname_pattern: ".*/etc/shadow$"
+
+  - id: "SIM_C_PTRACE_ATTACH"
+    name: "Ptrace attach attempt"
+    severity: "critical"
+    description: "Detect ptrace(PTRACE_ATTACH, ...) — emitted on syscall exit even when EPERM/ESRCH (failed attach)."
+    conditions:
+      syscall: "ptrace"
+      ptrace_request: 16

@@ -101,7 +101,14 @@ fn emit_pending_event_on_success(ctx: &TracePointContext, syscall: MemorySyscall
     let event = unsafe { pending_syscalls.get(&pid_tgid).copied() };
     let Some(mut event) = event else { return 0 };
 
-    if ret < 0 {
+    // Ptrace / openat: emit on exit even when the syscall fails (e.g. EPERM) so user-space rules
+    // can detect attach attempts and sensitive-path opens.
+    let always_emit = matches!(
+        syscall,
+        MemorySyscall::Ptrace | MemorySyscall::Openat | MemorySyscall::Execve
+    );
+
+    if ret < 0 && !always_emit {
         let _ = pending_syscalls.remove(&pid_tgid);
         return 0;
     }
@@ -148,6 +155,11 @@ pub fn sys_enter_execve(ctx: TracePointContext) -> u32 {
     store_pending_event(&ctx, MemorySyscall::Execve)
 }
 
+#[tracepoint(category = "syscalls", name = "sys_enter_openat")]
+pub fn sys_enter_openat(ctx: TracePointContext) -> u32 {
+    store_pending_event(&ctx, MemorySyscall::Openat)
+}
+
 #[tracepoint(category = "syscalls", name = "sys_exit_mmap")]
 pub fn sys_exit_mmap(ctx: TracePointContext) -> u32 {
     emit_pending_event_on_success(&ctx, MemorySyscall::Mmap)
@@ -171,6 +183,11 @@ pub fn sys_exit_ptrace(ctx: TracePointContext) -> u32 {
 #[tracepoint(category = "syscalls", name = "sys_exit_execve")]
 pub fn sys_exit_execve(ctx: TracePointContext) -> u32 {
     emit_pending_event_on_success(&ctx, MemorySyscall::Execve)
+}
+
+#[tracepoint(category = "syscalls", name = "sys_exit_openat")]
+pub fn sys_exit_openat(ctx: TracePointContext) -> u32 {
+    emit_pending_event_on_success(&ctx, MemorySyscall::Openat)
 }
 
 #[cfg(not(test))]
