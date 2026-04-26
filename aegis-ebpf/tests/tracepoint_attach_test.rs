@@ -5,6 +5,9 @@
 //! `cargo test` succeeds on restricted kernels (e.g. Firecracker). On a capable host:
 //!
 //! `sudo env PATH="$PATH" RUSTUP_HOME="$RUSTUP_HOME" CARGO_HOME="$CARGO_HOME" cargo test --test tracepoint_attach_test -p aegis-ebpf -- --ignored`
+//!
+//! The test sleeps briefly after `mmap` so `mprotect` is not dropped by the eBPF program’s shared
+//! mmap/mprotect rate limiter (see `RATE_LIMIT_INTERVAL_NS` in `aegis-ebpf-ebpf`).
 
 mod common;
 
@@ -84,6 +87,11 @@ fn test_tracepoint_attach_and_mprotect_event() {
         "mmap(MAP_ANONYMOUS) failed: {}",
         std::io::Error::last_os_error()
     );
+
+    // `sys_enter_mmap` and `sys_enter_mprotect` share the same per-TGID rate limit in the eBPF
+    // program (`RATE_LIMIT_INTERVAL_NS` = 100 ms). A mmap immediately before mprotect would
+    // suppress the mprotect enter path and no `MprotectWX` event would be emitted.
+    std::thread::sleep(Duration::from_millis(110));
 
     unsafe {
         let rc = libc::mprotect(page, 4096, prot_rwx);
