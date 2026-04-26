@@ -48,6 +48,7 @@ pub enum AegisErrorCode {
     ArenaFull = -2,
     ArenaEmpty = -3,
     Panic = -4,
+    InitFailed = -5,
 }
 
 impl From<ArenaError> for AegisErrorCode {

@@ -21,10 +21,12 @@ const EXPECTED_TRACEPOINTS: &[&str] = &[
     "sys_enter_mprotect",
     "sys_enter_memfd_create",
     "sys_enter_ptrace",
+    "sys_enter_execve",
     "sys_exit_mmap",
     "sys_exit_mprotect",
     "sys_exit_memfd_create",
     "sys_exit_ptrace",
+    "sys_exit_execve",
 ];
 
 #[test]

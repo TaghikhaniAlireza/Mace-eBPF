@@ -68,12 +68,13 @@ pub(crate) fn pipeline_json_callback_bridge() -> crate::StandardizedEventCallbac
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Mutex,
-        atomic::{AtomicUsize, Ordering},
+    use std::{
+        ffi::CStr,
+        sync::{
+            Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
     };
-
-    use std::ffi::CStr;
 
     use super::*;
 

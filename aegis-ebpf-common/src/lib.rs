@@ -10,6 +10,7 @@ pub enum MemorySyscall {
     Mprotect = 2,
     MemfdCreate = 3,
     Ptrace = 4,
+    Execve = 5,
 }
 
 impl MemorySyscall {
@@ -19,6 +20,7 @@ impl MemorySyscall {
             2 => Some(Self::Mprotect),
             3 => Some(Self::MemfdCreate),
             4 => Some(Self::Ptrace),
+            5 => Some(Self::Execve),
             _ => None,
         }
     }
@@ -29,6 +31,7 @@ impl MemorySyscall {
             Self::Mprotect => "mprotect",
             Self::MemfdCreate => "memfd_create",
             Self::Ptrace => "ptrace",
+            Self::Execve => "execve",
         }
     }
 }
@@ -66,6 +69,7 @@ pub enum EventType {
     MprotectWX = 1,
     MemfdCreate = 2,
     Ptrace = 3,
+    Execve = 4,
 }
 
 impl EventType {
@@ -75,6 +79,7 @@ impl EventType {
             2 => Some(Self::MprotectWX),
             3 => Some(Self::MemfdCreate),
             4 => Some(Self::Ptrace),
+            5 => Some(Self::Execve),
             _ => None,
         }
     }
@@ -109,6 +114,8 @@ impl MemoryEvent {
             EventType::MprotectWX => (raw.args[0], raw.args[1], raw.args[2]),
             EventType::MemfdCreate => (raw.args[0], 0, raw.args[1]),
             EventType::Ptrace => (raw.args[2], 0, raw.args[0]),
+            // execve: filename userspace pointer, argv pointer (userspace rules may read /proc/pid/cmdline)
+            EventType::Execve => (raw.args[0], raw.args[1], 0),
         };
 
         Some(Self {
@@ -175,13 +182,14 @@ mod tests {
         assert_eq!(MemorySyscall::from_u32(2), Some(MemorySyscall::Mprotect));
         assert_eq!(MemorySyscall::from_u32(3), Some(MemorySyscall::MemfdCreate));
         assert_eq!(MemorySyscall::from_u32(4), Some(MemorySyscall::Ptrace));
+        assert_eq!(MemorySyscall::from_u32(5), Some(MemorySyscall::Execve));
     }
 
-    /// Validates that `MemorySyscall::from_u32` returns `None` for out-of-range ids (0, 5, u32::MAX).
+    /// Validates that `MemorySyscall::from_u32` returns `None` for out-of-range ids (0, 6, u32::MAX).
     #[test]
     fn memory_syscall_from_u32_invalid_ids() {
         assert_eq!(MemorySyscall::from_u32(0), None);
-        assert_eq!(MemorySyscall::from_u32(5), None);
+        assert_eq!(MemorySyscall::from_u32(6), None);
         assert_eq!(MemorySyscall::from_u32(u32::MAX), None);
     }
 
@@ -192,6 +200,7 @@ mod tests {
         assert_eq!(MemorySyscall::Mprotect.as_str(), "mprotect");
         assert_eq!(MemorySyscall::MemfdCreate.as_str(), "memfd_create");
         assert_eq!(MemorySyscall::Ptrace.as_str(), "ptrace");
+        assert_eq!(MemorySyscall::Execve.as_str(), "execve");
     }
 
     // --- EventType ---
@@ -203,13 +212,14 @@ mod tests {
         assert_eq!(EventType::from_syscall(2), Some(EventType::MprotectWX));
         assert_eq!(EventType::from_syscall(3), Some(EventType::MemfdCreate));
         assert_eq!(EventType::from_syscall(4), Some(EventType::Ptrace));
+        assert_eq!(EventType::from_syscall(5), Some(EventType::Execve));
     }
 
     /// Validates that `EventType::from_syscall` returns `None` for unknown syscall ids.
     #[test]
     fn event_type_from_syscall_invalid() {
         assert_eq!(EventType::from_syscall(0), None);
-        assert_eq!(EventType::from_syscall(5), None);
+        assert_eq!(EventType::from_syscall(6), None);
         assert_eq!(EventType::from_syscall(u32::MAX), None);
     }
 

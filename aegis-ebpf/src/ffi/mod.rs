@@ -1,5 +1,6 @@
 pub mod alert_channel;
 pub mod arena;
+pub mod engine;
 pub mod event_callback;
 pub mod handle;
 pub mod jit_storm;

@@ -187,6 +187,9 @@ fn ensure_ffi_function_declarations(header_path: &Path) -> anyhow::Result<()> {
         && content.contains("aegis_simulate_jit_storm(")
         && content.contains("register_event_callback(")
         && content.contains("unregister_event_callback(")
+        && content.contains("aegis_engine_init(")
+        && content.contains("aegis_load_rules(")
+        && content.contains("aegis_start_pipeline(")
     {
         return Ok(());
     }
@@ -224,6 +227,11 @@ int32_t aegis_simulate_jit_storm(AegisArenaHandle *handle, uint32_t count, JitSt
 typedef void (*AegisJsonCallback)(const char *json_utf8);
 void register_event_callback(AegisJsonCallback cb);
 void unregister_event_callback(void);
+
+int32_t aegis_engine_init(void);
+int32_t aegis_load_rules(const char *yaml_utf8);
+int32_t aegis_start_pipeline(void);
+int32_t aegis_stop_pipeline(void);
 
 #ifdef __cplusplus
 } // extern "C"

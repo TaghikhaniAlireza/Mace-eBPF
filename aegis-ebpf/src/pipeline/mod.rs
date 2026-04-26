@@ -103,6 +103,11 @@ fn init_pipeline_rules(config: &config::PipelineConfig) -> Result<PipelineRules,
         return Ok(PipelineRules::Watched(watcher));
     }
 
+    if let Some(yaml) = &config.rules_inline_yaml {
+        let set = RuleSet::from_yaml_str(yaml).map_err(PipelineError::RuleLoadFailed)?;
+        return Ok(PipelineRules::Static(Arc::new(ArcSwap::from_pointee(set))));
+    }
+
     Ok(PipelineRules::Static(Arc::new(ArcSwap::from_pointee(
         RuleSet::default(),
     ))))

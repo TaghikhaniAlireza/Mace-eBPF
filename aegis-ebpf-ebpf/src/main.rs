@@ -143,6 +143,11 @@ pub fn sys_enter_ptrace(ctx: TracePointContext) -> u32 {
     store_pending_event(&ctx, MemorySyscall::Ptrace)
 }
 
+#[tracepoint(category = "syscalls", name = "sys_enter_execve")]
+pub fn sys_enter_execve(ctx: TracePointContext) -> u32 {
+    store_pending_event(&ctx, MemorySyscall::Execve)
+}
+
 #[tracepoint(category = "syscalls", name = "sys_exit_mmap")]
 pub fn sys_exit_mmap(ctx: TracePointContext) -> u32 {
     emit_pending_event_on_success(&ctx, MemorySyscall::Mmap)
@@ -161,6 +166,11 @@ pub fn sys_exit_memfd_create(ctx: TracePointContext) -> u32 {
 #[tracepoint(category = "syscalls", name = "sys_exit_ptrace")]
 pub fn sys_exit_ptrace(ctx: TracePointContext) -> u32 {
     emit_pending_event_on_success(&ctx, MemorySyscall::Ptrace)
+}
+
+#[tracepoint(category = "syscalls", name = "sys_exit_execve")]
+pub fn sys_exit_execve(ctx: TracePointContext) -> u32 {
+    emit_pending_event_on_success(&ctx, MemorySyscall::Execve)
 }
 
 #[cfg(not(test))]

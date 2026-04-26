@@ -46,6 +46,7 @@ fn syscall_name_for_event(event_type: EventType) -> &'static str {
         EventType::MprotectWX => "mprotect",
         EventType::MemfdCreate => "memfd_create",
         EventType::Ptrace => "ptrace",
+        EventType::Execve => "execve",
     }
 }
 

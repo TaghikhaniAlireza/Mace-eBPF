@@ -1,7 +1,7 @@
 pub mod loader;
 pub mod watcher;
 
-use std::{error::Error, fmt};
+use std::{error::Error, fmt, fs};
 
 use aegis_ebpf_common::EventType;
 use regex::Regex;
@@ -58,6 +58,10 @@ pub struct Conditions {
     /// Regex matched against the process `comm` (task name), e.g. `"^cat$"`.
     #[serde(default)]
     pub process_name_pattern: Option<String>,
+    /// Substrings that must all appear in `/proc/<pid>/cmdline` (NULs replaced with spaces).
+    /// Intended for `syscall: execve` rules (e.g. detect `whoami` in argv).
+    #[serde(default)]
+    pub argv_contains: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -123,6 +127,23 @@ impl Rule {
                 return false;
             };
             if !regex.is_match(&path) {
+                return false;
+            }
+        }
+
+        if !self.conditions.argv_contains.is_empty() {
+            if event.inner.event_type != EventType::Execve {
+                return false;
+            }
+            let Some(cmdline) = read_proc_cmdline_flat(event.inner.pid) else {
+                return false;
+            };
+            if !self
+                .conditions
+                .argv_contains
+                .iter()
+                .all(|needle| cmdline.contains(needle.as_str()))
+            {
                 return false;
             }
         }
@@ -196,6 +217,20 @@ pub(crate) fn validate_rule(rule: &Rule) -> Result<(), RuleError> {
         )));
     }
 
+    if !rule.conditions.argv_contains.is_empty() {
+        let ok = rule
+            .conditions
+            .syscall
+            .as_deref()
+            .map(|s| s.eq_ignore_ascii_case("execve"))
+            .unwrap_or(false);
+        if !ok {
+            return Err(RuleError::InvalidCondition(
+                "argv_contains requires syscall: execve".into(),
+            ));
+        }
+    }
+
     for flag in &rule.conditions.flags_contains {
         validate_flag_name(flag)?;
     }
@@ -249,13 +284,26 @@ fn event_syscall_name(event: &EnrichedEvent) -> &'static str {
         EventType::MprotectWX => "mprotect",
         EventType::MemfdCreate => "memfd_create",
         EventType::Ptrace => "ptrace",
+        EventType::Execve => "execve",
     }
 }
 
 fn is_supported_syscall(syscall: &str) -> bool {
     matches!(
         syscall.to_ascii_lowercase().as_str(),
-        "mmap" | "mprotect" | "memfd_create" | "ptrace"
+        "mmap" | "mprotect" | "memfd_create" | "ptrace" | "execve"
+    )
+}
+
+fn read_proc_cmdline_flat(pid: u32) -> Option<String> {
+    let path = format!("/proc/{pid}/cmdline");
+    let raw = fs::read(&path).ok()?;
+    let s = String::from_utf8_lossy(&raw);
+    Some(
+        s.split('\0')
+            .filter(|p| !p.is_empty())
+            .collect::<Vec<_>>()
+            .join(" "),
     )
 }
 

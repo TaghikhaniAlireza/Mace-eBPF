@@ -10,6 +10,8 @@ pub struct PipelineConfig {
     pub partition_count: usize,
     pub state_window_ms: u64,
     pub rules_path: Option<PathBuf>,
+    /// Inline YAML rule document (`rules:` list). Used when `rules_path` is `None`.
+    pub rules_inline_yaml: Option<String>,
     pub on_alert: Option<AlertCallback>,
     /// Called after rule evaluation with `serde_json` of [`crate::StandardizedEvent`] (empty `matched_rules` if none).
     pub on_standardized_event: Option<StandardizedEventCallback>,
@@ -24,6 +26,7 @@ impl Default for PipelineConfig {
             partition_count: 4,
             state_window_ms: 60_000,
             rules_path: None,
+            rules_inline_yaml: None,
             on_alert: None,
             on_standardized_event: None,
         }

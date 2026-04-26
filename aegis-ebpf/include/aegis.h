@@ -26,6 +26,7 @@ enum AegisErrorCode {
     ArenaFull = -2,
     ArenaEmpty = -3,
     Panic = -4,
+    InitFailed = -5,
 };
 typedef int32_t AegisErrorCode;
 
@@ -103,6 +104,11 @@ int32_t aegis_simulate_jit_storm(AegisArenaHandle *handle, uint32_t count, JitSt
 typedef void (*AegisJsonCallback)(const char *json_utf8);
 void register_event_callback(AegisJsonCallback cb);
 void unregister_event_callback(void);
+
+int32_t aegis_engine_init(void);
+int32_t aegis_load_rules(const char *yaml_utf8);
+int32_t aegis_start_pipeline(void);
+int32_t aegis_stop_pipeline(void);
 
 #ifdef __cplusplus
 } // extern "C"

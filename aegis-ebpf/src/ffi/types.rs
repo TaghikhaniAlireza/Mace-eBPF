@@ -41,6 +41,11 @@ impl From<&MemoryEvent> for RawMemoryEvent {
                 args[2] = event.addr;
                 MemorySyscall::Ptrace as u32
             }
+            EventType::Execve => {
+                args[0] = event.addr;
+                args[1] = event.len;
+                MemorySyscall::Execve as u32
+            }
         };
 
         Self {
