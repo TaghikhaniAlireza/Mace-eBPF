@@ -58,11 +58,13 @@ pub async fn start_sensor(config: SensorConfig) -> anyhow::Result<mpsc::Receiver
         ("sys_enter_memfd_create", "sys_enter_memfd_create"),
         ("sys_enter_ptrace", "sys_enter_ptrace"),
         ("sys_enter_execve", "sys_enter_execve"),
+        ("sys_enter_openat", "sys_enter_openat"),
         ("sys_exit_mmap", "sys_exit_mmap"),
         ("sys_exit_mprotect", "sys_exit_mprotect"),
         ("sys_exit_memfd_create", "sys_exit_memfd_create"),
         ("sys_exit_ptrace", "sys_exit_ptrace"),
         ("sys_exit_execve", "sys_exit_execve"),
+        ("sys_exit_openat", "sys_exit_openat"),
     ];
     for (program_name, tracepoint_name) in syscall_tracepoints {
         attach_syscall_tracepoint(&mut ebpf, program_name, tracepoint_name).with_context(|| {

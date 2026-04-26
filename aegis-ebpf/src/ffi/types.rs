@@ -38,6 +38,7 @@ impl From<&MemoryEvent> for RawMemoryEvent {
             }
             EventType::Ptrace => {
                 args[0] = event.flags;
+                args[1] = event.len;
                 args[2] = event.addr;
                 MemorySyscall::Ptrace as u32
             }
@@ -45,6 +46,12 @@ impl From<&MemoryEvent> for RawMemoryEvent {
                 args[0] = event.addr;
                 args[1] = event.len;
                 MemorySyscall::Execve as u32
+            }
+            EventType::Openat => {
+                args[0] = event.flags;
+                args[1] = event.addr;
+                args[2] = event.len;
+                MemorySyscall::Openat as u32
             }
         };
 

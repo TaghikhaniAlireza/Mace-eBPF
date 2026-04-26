@@ -1,7 +1,7 @@
 pub mod loader;
 pub mod watcher;
 
-use std::{error::Error, fmt, fs};
+use std::{error::Error, ffi::OsString, fmt, fs, os::unix::ffi::OsStringExt, path::PathBuf};
 
 use aegis_ebpf_common::EventType;
 use regex::Regex;
@@ -20,6 +20,9 @@ pub const PROT_WRITE: u64 = 0x2;
 pub const PROT_EXEC: u64 = 0x4;
 pub const MAP_ANONYMOUS: u64 = 0x20;
 
+/// Linux `PTRACE_ATTACH` (used for rule matching on ptrace events).
+pub const PTRACE_ATTACH: u64 = 16;
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Rule {
     pub id: String,
@@ -35,6 +38,9 @@ pub struct Rule {
     /// Filled at load time from `conditions.process_name_pattern` (never compile per event).
     #[serde(skip)]
     pub process_name_regex: Option<Regex>,
+    /// Filled at load time from `conditions.pathname_pattern` for `openat` rules.
+    #[serde(skip)]
+    pub pathname_regex: Option<Regex>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -62,6 +68,12 @@ pub struct Conditions {
     /// Intended for `syscall: execve` rules (e.g. detect `whoami` in argv).
     #[serde(default)]
     pub argv_contains: Vec<String>,
+    /// Regex matched against the resolved pathname for `syscall: openat` (via `process_vm_readv` on the tracee).
+    #[serde(default)]
+    pub pathname_pattern: Option<String>,
+    /// Optional `ptrace` request number (e.g. 16 for `PTRACE_ATTACH`); if set, must equal `event.flags`.
+    #[serde(default)]
+    pub ptrace_request: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -144,6 +156,29 @@ impl Rule {
                 .iter()
                 .all(|needle| cmdline.contains(needle.as_str()))
             {
+                return false;
+            }
+        }
+
+        if let Some(regex) = &self.pathname_regex {
+            if event.inner.event_type != EventType::Openat {
+                return false;
+            }
+            let Some(path) =
+                resolve_openat_pathname(event.inner.tgid, event.inner.flags, event.inner.addr)
+            else {
+                return false;
+            };
+            if !regex.is_match(&path) {
+                return false;
+            }
+        }
+
+        if let Some(req) = self.conditions.ptrace_request {
+            if event.inner.event_type != EventType::Ptrace {
+                return false;
+            }
+            if event.inner.flags != req {
                 return false;
             }
         }
@@ -231,6 +266,34 @@ pub(crate) fn validate_rule(rule: &Rule) -> Result<(), RuleError> {
         }
     }
 
+    if rule.conditions.pathname_pattern.is_some() {
+        let ok = rule
+            .conditions
+            .syscall
+            .as_deref()
+            .map(|s| s.eq_ignore_ascii_case("openat"))
+            .unwrap_or(false);
+        if !ok {
+            return Err(RuleError::InvalidCondition(
+                "pathname_pattern requires syscall: openat".into(),
+            ));
+        }
+    }
+
+    if rule.conditions.ptrace_request.is_some() {
+        let ok = rule
+            .conditions
+            .syscall
+            .as_deref()
+            .map(|s| s.eq_ignore_ascii_case("ptrace"))
+            .unwrap_or(false);
+        if !ok {
+            return Err(RuleError::InvalidCondition(
+                "ptrace_request requires syscall: ptrace".into(),
+            ));
+        }
+    }
+
     for flag in &rule.conditions.flags_contains {
         validate_flag_name(flag)?;
     }
@@ -249,6 +312,13 @@ pub(crate) fn validate_rule(rule: &Rule) -> Result<(), RuleError> {
             ))
         })?;
     }
+    if let Some(pattern) = rule.conditions.pathname_pattern.as_deref() {
+        Regex::new(pattern).map_err(|err| {
+            RuleError::InvalidCondition(format!(
+                "invalid pathname_pattern regex '{pattern}': {err}"
+            ))
+        })?;
+    }
     Ok(())
 }
 
@@ -263,6 +333,12 @@ pub(crate) fn compile_rule_regexes(rule: &mut Rule) -> Result<(), RuleError> {
     rule.process_name_regex = match rule.conditions.process_name_pattern.as_deref() {
         Some(p) => Some(Regex::new(p).map_err(|e| {
             RuleError::InvalidCondition(format!("process_name_pattern compile error: {e}"))
+        })?),
+        None => None,
+    };
+    rule.pathname_regex = match rule.conditions.pathname_pattern.as_deref() {
+        Some(p) => Some(Regex::new(p).map_err(|e| {
+            RuleError::InvalidCondition(format!("pathname_pattern compile error: {e}"))
         })?),
         None => None,
     };
@@ -285,13 +361,14 @@ fn event_syscall_name(event: &EnrichedEvent) -> &'static str {
         EventType::MemfdCreate => "memfd_create",
         EventType::Ptrace => "ptrace",
         EventType::Execve => "execve",
+        EventType::Openat => "openat",
     }
 }
 
 fn is_supported_syscall(syscall: &str) -> bool {
     matches!(
         syscall.to_ascii_lowercase().as_str(),
-        "mmap" | "mprotect" | "memfd_create" | "ptrace" | "execve"
+        "mmap" | "mprotect" | "memfd_create" | "ptrace" | "execve" | "openat"
     )
 }
 
@@ -305,6 +382,45 @@ fn read_proc_cmdline_flat(pid: u32) -> Option<String> {
             .collect::<Vec<_>>()
             .join(" "),
     )
+}
+
+const OPENAT_PATH_READ_CAP: usize = 4096;
+
+fn resolve_openat_pathname(pid: u32, dirfd: u64, pathname_ptr: u64) -> Option<String> {
+    if pathname_ptr == 0 {
+        return None;
+    }
+    let raw = read_remote_cstring(pid, pathname_ptr, OPENAT_PATH_READ_CAP)?;
+    let rel = PathBuf::from(OsString::from_vec(raw));
+
+    let dfd = dirfd as i32;
+    if dfd == libc::AT_FDCWD {
+        return Some(rel.to_string_lossy().into_owned());
+    }
+
+    let proc_fd = format!("/proc/{pid}/fd/{dfd}");
+    let base = fs::read_link(&proc_fd).ok()?;
+    Some(base.join(rel).to_string_lossy().into_owned())
+}
+
+fn read_remote_cstring(pid: u32, remote_ptr: u64, max_len: usize) -> Option<Vec<u8>> {
+    let mut buf = vec![0u8; max_len];
+    let local_iov = libc::iovec {
+        iov_base: buf.as_mut_ptr().cast(),
+        iov_len: buf.len(),
+    };
+    let remote_iov = libc::iovec {
+        iov_base: remote_ptr as *mut libc::c_void,
+        iov_len: buf.len(),
+    };
+    let n = unsafe { libc::process_vm_readv(pid as libc::pid_t, &local_iov, 1, &remote_iov, 1, 0) };
+    if n <= 0 {
+        return None;
+    }
+    let n = n as usize;
+    let end = buf[..n].iter().position(|&b| b == 0).unwrap_or(n);
+    buf.truncate(end);
+    Some(buf)
 }
 
 fn event_cgroup_path(event: &EnrichedEvent) -> Option<String> {
@@ -401,6 +517,7 @@ rules:
             stateful: None,
             cgroup_regex: None,
             process_name_regex: None,
+            pathname_regex: None,
         };
         let mprotect_event = fake_enriched_event(EventType::MprotectWX, 0, 4096);
         let mmap_event = fake_enriched_event(EventType::Mmap, 0, 4096);
@@ -422,6 +539,7 @@ rules:
             stateful: None,
             cgroup_regex: None,
             process_name_regex: None,
+            pathname_regex: None,
         };
 
         let match_event = fake_enriched_event(
@@ -448,6 +566,7 @@ rules:
             stateful: None,
             cgroup_regex: None,
             process_name_regex: None,
+            pathname_regex: None,
         };
 
         let anonymous = fake_enriched_event(EventType::Mmap, MAP_ANONYMOUS | PROT_EXEC, 4096);
@@ -472,6 +591,7 @@ rules:
                     stateful: None,
                     cgroup_regex: None,
                     process_name_regex: None,
+                    pathname_regex: None,
                 },
                 Rule {
                     id: "R2".into(),
@@ -485,6 +605,7 @@ rules:
                     stateful: None,
                     cgroup_regex: None,
                     process_name_regex: None,
+                    pathname_regex: None,
                 },
                 Rule {
                     id: "R3".into(),
@@ -498,6 +619,7 @@ rules:
                     stateful: None,
                     cgroup_regex: None,
                     process_name_regex: None,
+                    pathname_regex: None,
                 },
             ],
         };
