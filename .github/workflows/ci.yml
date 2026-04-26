@@ -17,6 +17,10 @@
 #   for `bpfel-unknown-none` when `ebpf-bin` stays off for the host package graph.
 # - If this job becomes flaky on a future runner image, narrow or gate the
 #   `--include-ignored` step (see comments on that step).
+# - The `build-and-test` job uses a **matrix of runner images** (20.04 / 22.04 / 24.04). The
+#   **kernel** is still the one shipped with each GitHub-hosted image (not arbitrary 5.x/6.x),
+#   but varying userland + headers + `uname -r` exercises **CO-RE / portability smoke** beyond a
+#   single `ubuntu-latest` pin. (For exact kernel families, use the Vagrant matrix in `scripts/vm/`.)
 # =============================================================================
 
 name: CI
@@ -33,8 +37,12 @@ env:
 
 jobs:
   build-and-test:
-    name: Build and test (eBPF + userspace)
-    runs-on: ubuntu-latest
+    name: Build and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-20.04, ubuntu-22.04, ubuntu-24.04]
 
     steps:
       - name: Checkout repository
