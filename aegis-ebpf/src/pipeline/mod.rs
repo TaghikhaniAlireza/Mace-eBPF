@@ -110,13 +110,20 @@ fn init_pipeline_rules(config: &config::PipelineConfig) -> Result<PipelineRules,
 
 pub async fn start_pipeline(
     sensor_config: SensorConfig,
-    pipeline_config: config::PipelineConfig,
+    mut pipeline_config: config::PipelineConfig,
     enricher: Arc<dyn ContextEnricher>,
 ) -> Result<PipelineHandle, PipelineError> {
     assert!(
         pipeline_config.partition_count.is_power_of_two(),
         "partition_count must be a power of 2"
     );
+
+    if pipeline_config.on_standardized_event.is_none()
+        && crate::ffi::event_callback::is_json_callback_registered()
+    {
+        pipeline_config.on_standardized_event =
+            Some(crate::ffi::event_callback::pipeline_json_callback_bridge());
+    }
 
     let rules = init_pipeline_rules(&pipeline_config)?;
     let raw_rx = start_sensor(sensor_config)

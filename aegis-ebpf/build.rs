@@ -185,6 +185,8 @@ fn ensure_ffi_function_declarations(header_path: &Path) -> anyhow::Result<()> {
     if content.contains("aegis_arena_new(")
         && content.contains("aegis_alert_channel_feed_test_alert(")
         && content.contains("aegis_simulate_jit_storm(")
+        && content.contains("register_event_callback(")
+        && content.contains("unregister_event_callback(")
     {
         return Ok(());
     }
@@ -218,6 +220,10 @@ typedef struct JitStormStats {
 } JitStormStats;
 
 int32_t aegis_simulate_jit_storm(AegisArenaHandle *handle, uint32_t count, JitStormStats *out_stats);
+
+typedef void (*AegisJsonCallback)(const char *json_utf8);
+void register_event_callback(AegisJsonCallback cb);
+void unregister_event_callback(void);
 
 #ifdef __cplusplus
 } // extern "C"

@@ -25,6 +25,7 @@ use aya::{
     programs::TracePoint,
 };
 pub use enrichment::{ContextEnricher, NoopEnricher, PodMetadata};
+pub use ffi::event_callback::{JsonCallback, register_event_callback, unregister_event_callback};
 use log::{debug, warn};
 pub use pipeline::{
     EnrichedEvent, PipelineError, PipelineHandle, config::PipelineConfig, start_pipeline,
