@@ -145,15 +145,16 @@ jobs:
         run: cargo build -p aegis-ebpf --verbose
 
       # --- Go + Python toolchains (cached: speeds repeat CI; `go mod download` still runs below).
+      # v6+ uses Node 24 (v5 targets Node 20 → deprecation warning when runners force Node 24).
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: stable
           cache: true
           cache-dependency-path: aegis-ebpf/pkg/aegis/go.sum
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
