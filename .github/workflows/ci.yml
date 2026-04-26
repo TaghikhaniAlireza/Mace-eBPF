@@ -12,6 +12,10 @@
 # **`ubuntu-18.04`:** Retired for many organizations; it is omitted from the matrix below.
 # Uncomment the line in `matrix.os` if your plan still offers `ubuntu-18.04` runners.
 #
+# **`ubuntu-20.04`:** GitHub-hosted `ubuntu-20.04` pools are small / deprecated and jobs often
+# **queue indefinitely**. Prefer `ubuntu-22.04` + `ubuntu-24.04` only; re-add `ubuntu-20.04` only if
+# you accept long waits or use self-hosted runners.
+#
 # Notes:
 # - Do **not** use `cargo ... --all-features` on the whole workspace: that enables
 #   `aegis-ebpf-ebpf/ebpf-bin`, which builds the `#!no_std` BPF binary for the host and hits
@@ -31,6 +35,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Use Node 24 for JS actions where supported (reduces Node 20 deprecation noise on runners).
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   # Runs in parallel with `build-and-test` (no `needs:`). Add `needs: [lint-and-audit]` to
@@ -40,7 +46,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install stable Rust (clippy + rustfmt)
         uses: dtolnay/rust-toolchain@stable
@@ -100,13 +106,13 @@ jobs:
       matrix:
         os:
           # - ubuntu-18.04  # uncomment only if your GitHub plan still provides this runner
-          - ubuntu-20.04
+          # - ubuntu-20.04  # often stuck queued — GitHub pool is tiny/deprecated; use 22.04+ or self-hosted
           - ubuntu-22.04
           - ubuntu-24.04
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # --- Rust: stable is the primary host toolchain; nightly + rust-src is
       #     required for `aya_build` / `-Z build-std` when compiling `aegis-ebpf-ebpf`.

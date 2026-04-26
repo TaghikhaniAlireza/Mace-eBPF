@@ -312,7 +312,9 @@ pub unsafe extern "C" fn aegis_alert_channel_recv(
 /// # Safety
 /// `handle` must be a valid pointer returned by `aegis_alert_channel_new` and not yet freed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn aegis_alert_channel_feed_test_alert(handle: *mut AegisAlertChannelHandle) -> i32 {
+pub unsafe extern "C" fn aegis_alert_channel_feed_test_alert(
+    handle: *mut AegisAlertChannelHandle,
+) -> i32 {
     if handle.is_null() {
         return AegisErrorCode::NullPointer as i32;
     }
