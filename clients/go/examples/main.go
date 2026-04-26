@@ -1,10 +1,15 @@
 // Example security monitor: register JSON callback, load execve rule for whoami, start embedded engine.
 //
-// Run as root from repo root (after `cargo build -p aegis-ebpf`):
+// From the repository root, after `cargo build -p aegis-ebpf`:
 //
+//	cd clients/go/examples
 //	sudo env PATH="$PATH" CGO_ENABLED=1 go run -tags cgo .
 //
-// In another terminal run `whoami`; this process prints StandardizedEvent JSON fields.
+// CGO links via #cgo LDFLAGS to ../../../target/debug; if the runtime loader cannot find libaegis_ebpf.so, set:
+//
+//	export LD_LIBRARY_PATH="/path/to/Aegis-eBPF/target/debug:$LD_LIBRARY_PATH"
+//
+// In another terminal run `whoami`; this process prints alert lines (uid, cmdline, matched rules).
 package main
 
 import (
@@ -34,8 +39,8 @@ func main() {
 	}
 
 	if err := aegis.RegisterEventCallback(func(ev aegis.StandardizedEvent) {
-		fmt.Printf("ALERT rules=%v syscall=%s pid=%d comm=%q args=%v ts=%d\n",
-			ev.MatchedRules, ev.SyscallName, ev.PID, ev.ProcessName, ev.Arguments, ev.Timestamp)
+		fmt.Printf("ALERT rules=%v syscall=%s pid=%d uid=%d comm=%q cmdline=%q args=%v ts=%d\n",
+			ev.MatchedRules, ev.SyscallName, ev.PID, ev.UID, ev.ProcessName, ev.Cmdline, ev.Arguments, ev.Timestamp)
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
