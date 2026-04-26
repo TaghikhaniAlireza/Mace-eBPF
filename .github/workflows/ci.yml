@@ -144,37 +144,69 @@ jobs:
       - name: Build shared library (debug)
         run: cargo build -p aegis-ebpf --verbose
 
-      # --- Go (cgo): link against `target/debug/libaegis_ebpf.so`
+      # --- Go + Python toolchains (cached: speeds repeat CI; `go mod download` still runs below).
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: stable
+          cache: true
+          cache-dependency-path: aegis-ebpf/pkg/aegis/go.sum
 
-      - name: Go tests (race)
-        env:
-          CGO_ENABLED: "1"
-          # Allow the linker to find `libaegis_ebpf.so` (package `#cgo LDFLAGS` also uses -L/-rpath).
-          CGO_LDFLAGS: "-L${{ github.workspace }}/target/debug -laegis_ebpf -Wl,-rpath,${{ github.workspace }}/target/debug"
-          LD_LIBRARY_PATH: "${{ github.workspace }}/target/debug"
-        working-directory: aegis-ebpf/pkg/aegis
-        run: go test -race -v ./...
-
-      # --- Python (ctypes): load `.so` at runtime via LD_LIBRARY_PATH
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: aegis-ebpf/python/setup.py
 
-      - name: Python tests
-        env:
-          LD_LIBRARY_PATH: "${{ github.workspace }}/target/debug"
-        working-directory: aegis-ebpf/python
+      # Prefetch modules while installing pytest (I/O overlap). Both only need the checkout + `.so` path for later tests.
+      - name: Prefetch Go modules and Python test deps
+        shell: bash
         run: |
           set -euxo pipefail
+          ROOT="${GITHUB_WORKSPACE}"
           python -m pip install --upgrade pip
-          python -m pip install -e .
           python -m pip install pytest
-          python -m pytest tests/ -v
+          python -m pip install -e "${ROOT}/aegis-ebpf/python" &
+          pip_pid=$!
+          ( cd "${ROOT}/aegis-ebpf/pkg/aegis" && go mod download ) &
+          go_pid=$!
+          wait "${pip_pid}"
+          wait "${go_pid}"
+
+      # Go (`-race`) and Python tests are independent; run in parallel to shorten wall-clock.
+      # Both only read `libaegis_ebpf.so` — no shared mutable state between processes.
+      - name: Go and Python tests (parallel)
+        shell: bash
+        env:
+          CGO_ENABLED: "1"
+          CGO_LDFLAGS: "-L${{ github.workspace }}/target/debug -laegis_ebpf -Wl,-rpath,${{ github.workspace }}/target/debug"
+          LD_LIBRARY_PATH: "${{ github.workspace }}/target/debug"
+        run: |
+          set -euxo pipefail
+          ROOT="${GITHUB_WORKSPACE}"
+          export LD_LIBRARY_PATH="${ROOT}/target/debug:${LD_LIBRARY_PATH:-}"
+
+          ( cd "${ROOT}/aegis-ebpf/pkg/aegis" && go test -race -v ./... ) &
+          go_pid=$!
+
+          ( cd "${ROOT}/aegis-ebpf/python" && python -m pytest tests/ -v ) &
+          py_pid=$!
+
+          go_exit=0
+          wait "${go_pid}" || go_exit=$?
+          py_exit=0
+          wait "${py_pid}" || py_exit=$?
+
+          if [[ "${go_exit}" -ne 0 ]]; then
+            echo "::error::Go tests failed (exit ${go_exit})"
+          fi
+          if [[ "${py_exit}" -ne 0 ]]; then
+            echo "::error::Python tests failed (exit ${py_exit})"
+          fi
+          if [[ "${go_exit}" -ne 0 || "${py_exit}" -ne 0 ]]; then
+            exit 1
+          fi
 
   build-and-test:
     name: Build and test (${{ matrix.os }})
