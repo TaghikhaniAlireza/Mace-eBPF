@@ -33,8 +33,10 @@ struct ScratchBuf {
 #[map]
 static EVENTS: RingBuf = RingBuf::with_byte_size(RINGBUF_SIZE_BYTES, 0);
 
+/// Slot 0: assembled execve/openat payload (same as before). Slot 1: temp buffer for each argv string
+/// read **always at offset 0** (verifier rejects user-str reads into map_value+off when off≠0).
 #[map]
-static SCRATCH_ARGV: PerCpuArray<ScratchBuf> = PerCpuArray::with_max_entries(1, 0);
+static SCRATCH_ARGV: PerCpuArray<ScratchBuf> = PerCpuArray::with_max_entries(2, 0);
 
 /// Assemble [`RingBufferSample`] here (map-backed) so emit avoids ~4 KiB BPF stack temporaries.
 #[map]
@@ -96,10 +98,14 @@ fn read_syscall_args(ctx: &TracePointContext) -> [u64; SYSCALL_ARG_COUNT] {
 
 /// Build joined argv in per-CPU scratch; returns written length (excluding final NUL).
 fn capture_execve_argv_into_scratch(argv_ptr: u64) -> usize {
-    let Some(ptr) = SCRATCH_ARGV.get_ptr_mut(0) else {
+    let Some(scratch_ptr) = SCRATCH_ARGV.get_ptr_mut(0) else {
         return 0;
     };
-    let scratch = unsafe { &mut *ptr };
+    let Some(temp_ptr) = SCRATCH_ARGV.get_ptr_mut(1) else {
+        return 0;
+    };
+    let scratch = unsafe { &mut *scratch_ptr };
+    let temp = unsafe { &mut *temp_ptr };
     zero_scratch_buf(scratch);
 
     if argv_ptr == 0 {
@@ -127,13 +133,31 @@ fn capture_execve_argv_into_scratch(argv_ptr: u64) -> usize {
         if off >= EXECVE_SCRATCH_LEN {
             break;
         }
-        // Fixed tail slice only (avoid `buf[off..off+remain]` — verifier loses map_value bounds).
-        let tail = &mut scratch.buf[off..EXECVE_SCRATCH_LEN];
-        let n = match unsafe { bpf_probe_read_user_str_bytes(arg_user_ptr as *const u8, tail) } {
+        unsafe {
+            core::ptr::write_bytes(temp.buf.as_mut_ptr(), 0u8, EXECVE_SCRATCH_LEN);
+        }
+        // Must read at map offset 0 — reading into `scratch.buf[off..]` trips strict verifiers.
+        let n = match unsafe {
+            bpf_probe_read_user_str_bytes(
+                arg_user_ptr as *const u8,
+                &mut temp.buf[..EXECVE_SCRATCH_LEN],
+            )
+        } {
             Ok(b) => b.len(),
             Err(_) => 0,
         };
-        off = off.saturating_add(n);
+        let room = EXECVE_SCRATCH_LEN.saturating_sub(off);
+        let copy_len = n.min(room);
+        if copy_len > 0 {
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    temp.buf.as_ptr(),
+                    scratch.buf.as_mut_ptr().add(off),
+                    copy_len,
+                );
+            }
+        }
+        off = off.saturating_add(copy_len);
         if off >= EXECVE_SCRATCH_LEN {
             off = EXECVE_SCRATCH_LEN;
             break;

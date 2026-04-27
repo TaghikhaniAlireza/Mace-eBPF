@@ -11,8 +11,10 @@ pub const SYSCALL_ARG_COUNT: usize = 6;
 /// v3: shrinks argv/openat blobs so `PendingEvent` fits the BPF stack (~512 B) on all tracepoints.
 /// v4: single `payload_blob` (max of argv vs openat) so eBPF `PendingEvent` holds one large buffer.
 /// v5: full execve cmdline up to [`EXECVE_SCRATCH_LEN`] (built in per-CPU scratch in eBPF); openat prefix unchanged.
-/// v6: [`EXECVE_SCRATCH_LEN`] 1024; eBPF uses `write_bytes` for scratch clear and fixed `buf[off..END]` for `bpf_probe_read_user_str` (strict verifiers reject dynamic `off+remain` subslices and huge insn counts from naive clears).
-pub const RING_SAMPLE_LAYOUT_VERSION: u32 = 6;
+/// v6: [`EXECVE_SCRATCH_LEN`] 1024 + `write_bytes` scratch clear.
+/// v7: execve reads each argv into a **second** per-CPU slot at offset 0 only — strict verifiers reject
+/// `bpf_probe_read_user_str` into `buf[off..LEN]` when `off > 0` (`invalid access … off=63 size=1023`).
+pub const RING_SAMPLE_LAYOUT_VERSION: u32 = 7;
 
 /// Max bytes for `openat` pathname snapshot in BPF (including NUL).
 pub const OPENAT_PATH_MAX_LEN: usize = 64;
