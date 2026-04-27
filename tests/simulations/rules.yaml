@@ -118,12 +118,22 @@ suppressions:
 
   - id: "SUPP_GNOME_SHELL_MAP_ANON_READ"
     name: "Mutter/clutter anonymous read mappings"
-    description: "JIT-heavy desktop shell uses anonymous RW→RX transitions; suppress plain PROT_READ mmap noise."
+    description: "Legacy: mmap flags field carries MAP_* bits (see SUPP_GNOME_SHELL_MAP_ANONYMOUS)."
     conditions:
       syscall: "mmap"
       process_name_pattern: "^gnome-shell$"
       flags_contains: ["PROT_READ"]
       flags_excludes: ["PROT_EXEC", "PROT_WRITE"]
+
+  # mmap `flags` in events is syscall arg3 (MAP_*); e.g. 0x32 includes MAP_PRIVATE|MAP_ANONYMOUS — not PROT_*.
+  - id: "SUPP_GNOME_SHELL_MAP_ANONYMOUS"
+    name: "gnome-shell anonymous mmap arenas"
+    description: "Compositor allocates MAP_PRIVATE|MAP_ANONYMOUS regions (typical flags like 0x22/0x32)."
+    conditions:
+      syscall: "mmap"
+      process_name_pattern: "^gnome-shell$"
+      flags_contains: ["MAP_ANONYMOUS"]
+      flags_excludes: ["PROT_EXEC"]
 
   - id: "SUPP_TOKIO_WORKER_MAP_ANON"
     name: "Tokio worker anonymous mappings"
@@ -171,12 +181,12 @@ suppressions:
       pathname_pattern: ".*/proc/(interrupts|stat|irq/[0-9]+/smp_affinity)$"
 
   - id: "SUPP_VMTOOLSD_PROC"
-    name: "open-vm-tools host metrics"
-    description: "Guest tools poll /proc for memory, disk, uptime."
+    name: "open-vm-tools guest introspection"
+    description: "/proc stats, block device sysfs walks, DNS/routing snapshot (guest OS inventory)."
     conditions:
       syscall: "openat"
       process_name_pattern: "^vmtoolsd$"
-      pathname_pattern: ".*/proc/(meminfo|vmstat|stat|zoneinfo|uptime|diskstats)$"
+      pathname_pattern: ".*/(etc/mtab|proc/(meminfo|vmstat|stat|zoneinfo|uptime|diskstats|devices|net/route|net/ipv6_route)|run/systemd/resolve/resolv\\.conf|sys/class/block(/.*)?)$"
 
   # --- Interactive tiny utilities (locale/terminfo); narrow comm to avoid masking malicious `cat` ---
   - id: "SUPP_CLEAR_LOCALE_TERMI"
