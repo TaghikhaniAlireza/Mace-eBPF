@@ -2,9 +2,9 @@
 #![no_main]
 
 use aegis_ebpf_common::{
-    EXECVE_ARG_STR_MAX, EXECVE_ARGV_MAX_ARGS, EXECVE_SCRATCH_LEN, KernelMemoryEvent, MemorySyscall,
-    OPENAT_PATH_MAX_LEN, RING_PAYLOAD_BLOB_LEN, RING_SAMPLE_LAYOUT_VERSION, RingBufferSample,
-    SYSCALL_ARG_COUNT, TASK_COMM_LEN,
+    EXECVE_SCRATCH_LEN, KernelMemoryEvent, MemorySyscall, OPENAT_PATH_MAX_LEN,
+    RING_PAYLOAD_BLOB_LEN, RING_SAMPLE_LAYOUT_VERSION, RingBufferSample, SYSCALL_ARG_COUNT,
+    TASK_COMM_LEN,
 };
 use aya_ebpf::{
     helpers::{
@@ -33,10 +33,9 @@ struct ScratchBuf {
 #[map]
 static EVENTS: RingBuf = RingBuf::with_byte_size(RINGBUF_SIZE_BYTES, 0);
 
-/// Slot 0: assembled execve/openat payload (same as before). Slot 1: temp buffer for each argv string
-/// read **always at offset 0** (verifier rejects user-str reads into map_value+off when off≠0).
+/// Single per-CPU buffer: execve stores `argv[0]` only (v10); openat stores pathname prefix.
 #[map]
-static SCRATCH_ARGV: PerCpuArray<ScratchBuf> = PerCpuArray::with_max_entries(2, 0);
+static SCRATCH_ARGV: PerCpuArray<ScratchBuf> = PerCpuArray::with_max_entries(1, 0);
 
 /// Assemble [`RingBufferSample`] here (map-backed) so emit avoids ~4 KiB BPF stack temporaries.
 #[map]
@@ -96,77 +95,35 @@ fn read_syscall_args(ctx: &TracePointContext) -> [u64; SYSCALL_ARG_COUNT] {
     ]
 }
 
-/// Build joined argv in per-CPU scratch; returns written length (excluding final NUL).
+/// Snapshot **`argv[0]` only** (executable path) into scratch at offset 0.
+///
+/// Joining multiple argv strings in-kernel caused `copy_nonoverlapping` + loops that pushed
+/// `sys_enter_execve` past the verifier's 1M instruction limit on strict kernels.
 fn capture_execve_argv_into_scratch(argv_ptr: u64) -> usize {
     let Some(scratch_ptr) = SCRATCH_ARGV.get_ptr_mut(0) else {
         return 0;
     };
-    let Some(temp_ptr) = SCRATCH_ARGV.get_ptr_mut(1) else {
-        return 0;
-    };
     let scratch = unsafe { &mut *scratch_ptr };
-    let temp = unsafe { &mut *temp_ptr };
     zero_scratch_buf(scratch);
 
     if argv_ptr == 0 {
         return 0;
     }
 
-    let argv = argv_ptr as *const u64;
-    let mut off = 0usize;
-
-    for i in 0..EXECVE_ARGV_MAX_ARGS {
-        let arg_user_ptr = match unsafe { bpf_probe_read_user(argv.add(i as usize)) } {
-            Ok(p) => p,
-            Err(_) => break,
-        };
-        if arg_user_ptr == 0 {
-            break;
-        }
-        if i > 0 {
-            if off >= EXECVE_SCRATCH_LEN {
-                break;
-            }
-            scratch.buf[off] = b' ';
-            off += 1;
-        }
-        if off >= EXECVE_SCRATCH_LEN {
-            break;
-        }
-        // Only zero/read the first `EXECVE_ARG_STR_MAX` bytes of the temp slot (not full scratch size).
-        unsafe {
-            core::ptr::write_bytes(temp.buf.as_mut_ptr(), 0u8, EXECVE_ARG_STR_MAX);
-        }
-        // Must read at map offset 0 — reading into `scratch.buf[off..]` trips strict verifiers.
-        let n = match unsafe {
-            bpf_probe_read_user_str_bytes(
-                arg_user_ptr as *const u8,
-                &mut temp.buf[..EXECVE_ARG_STR_MAX],
-            )
-        } {
-            Ok(b) => b.len(),
-            Err(_) => 0,
-        };
-        let room = EXECVE_SCRATCH_LEN.saturating_sub(off);
-        // Bound copy so `copy_nonoverlapping(len)` has a tight upper bound for the verifier.
-        let copy_len = n.min(room).min(EXECVE_ARG_STR_MAX);
-        if copy_len > 0 {
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    temp.buf.as_ptr(),
-                    scratch.buf.as_mut_ptr().add(off),
-                    copy_len,
-                );
-            }
-        }
-        off = off.saturating_add(copy_len);
-        if off >= EXECVE_SCRATCH_LEN {
-            off = EXECVE_SCRATCH_LEN;
-            break;
-        }
+    let argv0 = match unsafe { bpf_probe_read_user(argv_ptr as *const u64) } {
+        Ok(p) => p,
+        Err(_) => return 0,
+    };
+    if argv0 == 0 {
+        return 0;
     }
 
-    off
+    match unsafe {
+        bpf_probe_read_user_str_bytes(argv0 as *const u8, &mut scratch.buf[..EXECVE_SCRATCH_LEN])
+    } {
+        Ok(b) => b.len(),
+        Err(_) => 0,
+    }
 }
 
 fn capture_openat_path_into_scratch(path_ptr: u64) {

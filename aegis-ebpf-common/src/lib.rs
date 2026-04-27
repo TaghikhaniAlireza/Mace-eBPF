@@ -15,21 +15,23 @@ pub const SYSCALL_ARG_COUNT: usize = 6;
 /// v7: execve reads each argv into a **second** per-CPU slot at offset 0 only — strict verifiers reject
 /// `bpf_probe_read_user_str` into `buf[off..LEN]` when `off > 0` (`invalid access … off=63 size=1023`).
 /// v8: cap per-arg read/copy and argv count for insn budget.
-/// v9: tighter caps (512-byte scratch, 96-byte per argv, 10 argv slots) — v8 still exceeded 1M verifier
-/// insns on strict kernels (`BPF program is too large`; userspace often reports errno 7/E2BIG or 28/ENOSPC).
-pub const RING_SAMPLE_LAYOUT_VERSION: u32 = 9;
+/// v9: tighter caps for insn budget (still insufficient on some kernels).
+/// v10: **argv[0] only** in eBPF — joined multi-arg cmdline was removed because variable-length
+/// `copy_nonoverlapping` + loops exceeded the 1M verifier insn cap (`BPF program is too large`).
+/// Userspace may enrich from `/proc/<pid>/cmdline` if needed.
+pub const RING_SAMPLE_LAYOUT_VERSION: u32 = 10;
 
 /// Max bytes for `openat` pathname snapshot in BPF (including NUL).
 pub const OPENAT_PATH_MAX_LEN: usize = 64;
 
-/// Max bytes for concatenated `execve` argv (space-separated). Smaller ⇒ fewer verifier states in copy/zero paths.
-pub const EXECVE_SCRATCH_LEN: usize = 512;
+/// Max bytes for execve primary string snapshot (`argv[0]`) and max joined length field for wire layout.
+pub const EXECVE_SCRATCH_LEN: usize = 256;
 
-/// Max number of `argv[]` pointers walked when building the joined cmdline (each adds verifier cost).
-pub const EXECVE_ARGV_MAX_ARGS: u32 = 10;
+/// Retained for YAML/docs compatibility; eBPF only reads `argv[0]` (see v10).
+pub const EXECVE_ARGV_MAX_ARGS: u32 = 1;
 
-/// Max bytes read from **one** argv string before append (then capped by remaining room in scratch).
-pub const EXECVE_ARG_STR_MAX: usize = 96;
+/// Max bytes read for a single argv string (same as scratch for `argv[0]` capture).
+pub const EXECVE_ARG_STR_MAX: usize = EXECVE_SCRATCH_LEN;
 
 /// One shared byte buffer in the ring sample: execve fills with joined argv (NUL-padded); openat uses prefix only.
 pub const RING_PAYLOAD_BLOB_LEN: usize = const_max(EXECVE_SCRATCH_LEN, OPENAT_PATH_MAX_LEN);
