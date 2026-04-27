@@ -38,6 +38,7 @@ fn stop_engine_inner() {
 /// Initialize global engine state: stops any previous run, clears staged YAML.
 #[unsafe(no_mangle)]
 pub extern "C" fn aegis_engine_init() -> i32 {
+    crate::init_logging_for_ffi();
     stop_engine_inner();
     if let Ok(mut g) = ENGINE_YAML.lock() {
         *g = None;
@@ -115,6 +116,10 @@ pub extern "C" fn aegis_start_pipeline() -> i32 {
                     return;
                 }
             };
+
+            tracing::info!(
+                "aegis: eBPF sensor and rule pipeline started (set RUST_LOG=debug for verbose logs)"
+            );
 
             let _ = shutdown_rx.await;
             handle.shutdown().await;

@@ -5,6 +5,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
+    sync::Once,
     time::Duration,
 };
 
@@ -29,6 +30,26 @@ use aya::{
 pub use enrichment::{ContextEnricher, NoopEnricher, PodMetadata};
 pub use ffi::event_callback::{JsonCallback, register_event_callback, unregister_event_callback};
 use log::{debug, warn};
+use tracing_subscriber::{EnvFilter, prelude::*};
+
+static FFI_LOG_ONCE: Once = Once::new();
+
+/// When loaded as `libaegis_ebpf.so`, nothing runs `main()` — install a `tracing` subscriber once so
+/// **`RUST_LOG`** applies to `tracing::*` macros (rule engine, pipeline). Also bridges the `log`
+/// crate via **`tracing-log`** (`log::info!`, etc.).
+pub(crate) fn init_logging_for_ffi() {
+    FFI_LOG_ONCE.call_once(|| {
+        let _ = tracing_log::LogTracer::init();
+        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+            // sensible default when `RUST_LOG` is unset (embedded Go/Python callers)
+            EnvFilter::new("info")
+        });
+        let _ = tracing_subscriber::registry()
+            .with(filter)
+            .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
+            .try_init();
+    });
+}
 pub use pipeline::{
     EnrichedEvent, PipelineError, PipelineHandle, config::PipelineConfig, start_pipeline,
 };
