@@ -2,7 +2,7 @@
 #![no_main]
 
 use aegis_ebpf_common::{
-    EXECVE_ARGV_MAX_ARGS, EXECVE_SCRATCH_LEN, KernelMemoryEvent, MemorySyscall,
+    EXECVE_ARG_STR_MAX, EXECVE_ARGV_MAX_ARGS, EXECVE_SCRATCH_LEN, KernelMemoryEvent, MemorySyscall,
     OPENAT_PATH_MAX_LEN, RING_PAYLOAD_BLOB_LEN, RING_SAMPLE_LAYOUT_VERSION, RingBufferSample,
     SYSCALL_ARG_COUNT, TASK_COMM_LEN,
 };
@@ -133,21 +133,23 @@ fn capture_execve_argv_into_scratch(argv_ptr: u64) -> usize {
         if off >= EXECVE_SCRATCH_LEN {
             break;
         }
+        // Only zero/read the slice we need — clearing all 1024 bytes every arg explodes verifier insn count.
         unsafe {
-            core::ptr::write_bytes(temp.buf.as_mut_ptr(), 0u8, EXECVE_SCRATCH_LEN);
+            core::ptr::write_bytes(temp.buf.as_mut_ptr(), 0u8, EXECVE_ARG_STR_MAX);
         }
         // Must read at map offset 0 — reading into `scratch.buf[off..]` trips strict verifiers.
         let n = match unsafe {
             bpf_probe_read_user_str_bytes(
                 arg_user_ptr as *const u8,
-                &mut temp.buf[..EXECVE_SCRATCH_LEN],
+                &mut temp.buf[..EXECVE_ARG_STR_MAX],
             )
         } {
             Ok(b) => b.len(),
             Err(_) => 0,
         };
         let room = EXECVE_SCRATCH_LEN.saturating_sub(off);
-        let copy_len = n.min(room);
+        // Bound copy so `copy_nonoverlapping(len)` has a tight upper bound for the verifier.
+        let copy_len = n.min(room).min(EXECVE_ARG_STR_MAX);
         if copy_len > 0 {
             unsafe {
                 core::ptr::copy_nonoverlapping(

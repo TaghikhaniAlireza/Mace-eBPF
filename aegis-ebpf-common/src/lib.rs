@@ -14,7 +14,9 @@ pub const SYSCALL_ARG_COUNT: usize = 6;
 /// v6: [`EXECVE_SCRATCH_LEN`] 1024 + `write_bytes` scratch clear.
 /// v7: execve reads each argv into a **second** per-CPU slot at offset 0 only — strict verifiers reject
 /// `bpf_probe_read_user_str` into `buf[off..LEN]` when `off > 0` (`invalid access … off=63 size=1023`).
-pub const RING_SAMPLE_LAYOUT_VERSION: u32 = 7;
+/// v8: cap per-argument read/copy (`EXECVE_ARG_STR_MAX`) and argv count — full 1024×64 memcpy paths hit the
+/// verifier insn limit (`BPF program is too large`, errno 28 / ENOSPC in practice).
+pub const RING_SAMPLE_LAYOUT_VERSION: u32 = 8;
 
 /// Max bytes for `openat` pathname snapshot in BPF (including NUL).
 pub const OPENAT_PATH_MAX_LEN: usize = 64;
@@ -24,8 +26,12 @@ pub const OPENAT_PATH_MAX_LEN: usize = 64;
 pub const EXECVE_SCRATCH_LEN: usize = 1024;
 
 /// Max number of `argv[]` pointers the eBPF program walks when building the execve cmdline.
-/// Keep this modest: each iteration adds verifier complexity; 64 args is enough for realistic shells and attacks.
-pub const EXECVE_ARGV_MAX_ARGS: u32 = 64;
+/// Keep low: each iteration multiplies verifier state; 64× made `sys_enter_execve` exceed the 1M insn budget.
+pub const EXECVE_ARGV_MAX_ARGS: u32 = 24;
+
+/// Max bytes read from **one** argv string in eBPF (then appended to the joined cmdline up to [`EXECVE_SCRATCH_LEN`]).
+/// Must be modest: large `copy_nonoverlapping`/`memset` per-arg explodes verifier complexity.
+pub const EXECVE_ARG_STR_MAX: usize = 256;
 
 /// One shared byte buffer in the ring sample: execve fills with joined argv (NUL-padded); openat uses prefix only.
 pub const RING_PAYLOAD_BLOB_LEN: usize = const_max(EXECVE_SCRATCH_LEN, OPENAT_PATH_MAX_LEN);
