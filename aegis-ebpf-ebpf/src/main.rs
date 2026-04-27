@@ -3,7 +3,8 @@
 
 use aegis_ebpf_common::{
     EXECVE_ARG_MAX_LEN, EXECVE_ARGC_CAPTURE, EXECVE_ARGV_BLOB_LEN, KernelMemoryEvent,
-    MemorySyscall, RING_SAMPLE_LAYOUT_VERSION, RingBufferSample, SYSCALL_ARG_COUNT, TASK_COMM_LEN,
+    MemorySyscall, OPENAT_PATH_MAX_LEN, RING_PAYLOAD_BLOB_LEN, RING_SAMPLE_LAYOUT_VERSION,
+    RingBufferSample, SYSCALL_ARG_COUNT, TASK_COMM_LEN,
 };
 use aya_ebpf::{
     helpers::{
@@ -30,7 +31,8 @@ static EVENTS: RingBuf = RingBuf::with_byte_size(RINGBUF_SIZE_BYTES, 0);
 #[derive(Clone, Copy)]
 struct PendingEvent {
     kernel: KernelMemoryEvent,
-    execve_argv_blob: [u8; EXECVE_ARGV_BLOB_LEN],
+    /// Union of execve argv slots and openat path (only one syscall populates per pending entry).
+    payload_blob: [u8; RING_PAYLOAD_BLOB_LEN],
 }
 
 #[allow(non_upper_case_globals)]
@@ -49,12 +51,11 @@ static RATE_LIMIT_LAST_TS: LruHashMap<u32, u64> =
 static RATE_LIMITED_COUNT: LruHashMap<u32, u64> =
     LruHashMap::with_max_entries(RATE_LIMIT_MAX_ENTRIES, 0);
 
-#[inline(always)]
 fn should_rate_limit(syscall: MemorySyscall) -> bool {
-    matches!(syscall, MemorySyscall::Mmap | MemorySyscall::Mprotect)
+    // Rate-limit mmap→mprotect storms only at mmap; do not suppress standalone mprotect RWX (SIM_A_RWX).
+    syscall == MemorySyscall::Mmap
 }
 
-#[inline(always)]
 fn read_syscall_args(ctx: &TracePointContext) -> [u64; SYSCALL_ARG_COUNT] {
     [
         unsafe { ctx.read_at::<u64>(16).unwrap_or(0) },
@@ -66,9 +67,17 @@ fn read_syscall_args(ctx: &TracePointContext) -> [u64; SYSCALL_ARG_COUNT] {
     ]
 }
 
-#[inline(always)]
-fn capture_execve_argv(argv_ptr: u64, out_blob: &mut [u8; EXECVE_ARGV_BLOB_LEN]) {
-    if argv_ptr == 0 {
+fn capture_openat_path(path_ptr: u64, out: &mut [u8]) {
+    if path_ptr == 0 || out.len() < OPENAT_PATH_MAX_LEN {
+        return;
+    }
+    let _ = unsafe {
+        bpf_probe_read_user_str_bytes(path_ptr as *const u8, &mut out[..OPENAT_PATH_MAX_LEN])
+    };
+}
+
+fn capture_execve_argv(argv_ptr: u64, out_blob: &mut [u8]) {
+    if argv_ptr == 0 || out_blob.len() < EXECVE_ARGV_BLOB_LEN {
         return;
     }
     let argv = argv_ptr as *const u64;
@@ -86,7 +95,6 @@ fn capture_execve_argv(argv_ptr: u64, out_blob: &mut [u8; EXECVE_ARGV_BLOB_LEN])
     }
 }
 
-#[inline(always)]
 fn store_pending_event(ctx: &TracePointContext, syscall: MemorySyscall) -> u32 {
     let pid_tgid = bpf_get_current_pid_tgid();
     let tgid = (pid_tgid >> 32) as u32;
@@ -111,22 +119,24 @@ fn store_pending_event(ctx: &TracePointContext, syscall: MemorySyscall) -> u32 {
 
     let comm = bpf_get_current_comm().unwrap_or([0; TASK_COMM_LEN]);
     let args = read_syscall_args(ctx);
-    let mut execve_argv_blob = [0u8; EXECVE_ARGV_BLOB_LEN];
+    // Build `PendingEvent` in place: separate temp `[u8; N]` arrays plus a full `PendingEvent`
+    // exceed the ~512 B BPF stack limit when LLVM keeps both alive across helper calls.
+    let mut pending = PendingEvent {
+        kernel: KernelMemoryEvent {
+            timestamp_ns: now_ns,
+            pid: pid_tgid as u32,
+            tgid,
+            syscall: syscall as u32,
+            args,
+            comm,
+        },
+        payload_blob: [0u8; RING_PAYLOAD_BLOB_LEN],
+    };
     if syscall == MemorySyscall::Execve {
-        capture_execve_argv(args[1], &mut execve_argv_blob);
+        capture_execve_argv(args[1], &mut pending.payload_blob[..EXECVE_ARGV_BLOB_LEN]);
+    } else if syscall == MemorySyscall::Openat {
+        capture_openat_path(args[1], &mut pending.payload_blob[..OPENAT_PATH_MAX_LEN]);
     }
-    let kernel = KernelMemoryEvent {
-        timestamp_ns: now_ns,
-        pid: pid_tgid as u32,
-        tgid,
-        syscall: syscall as u32,
-        args,
-        comm,
-    };
-    let pending = PendingEvent {
-        kernel,
-        execve_argv_blob,
-    };
 
     if let Err(err) = pending_syscalls.insert(pid_tgid, pending, 0) {
         warn!(ctx, "pending syscall insert failed: {}", err);
@@ -136,7 +146,6 @@ fn store_pending_event(ctx: &TracePointContext, syscall: MemorySyscall) -> u32 {
     0
 }
 
-#[inline(always)]
 fn emit_pending_event_on_success(ctx: &TracePointContext, syscall: MemorySyscall) -> u32 {
     let pid_tgid = bpf_get_current_pid_tgid();
     let ret = unsafe { ctx.read_at::<i64>(16).unwrap_or(-1) };
@@ -168,7 +177,7 @@ fn emit_pending_event_on_success(ctx: &TracePointContext, syscall: MemorySyscall
         uid,
         _reserved: 0,
         layout_version: RING_SAMPLE_LAYOUT_VERSION,
-        execve_argv_blob: pending.execve_argv_blob,
+        payload_blob: pending.payload_blob,
     };
     if let Some(mut entry) = EVENTS.reserve::<RingBufferSample>(0) {
         entry.write(sample);

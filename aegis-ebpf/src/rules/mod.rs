@@ -1,13 +1,17 @@
 pub mod loader;
 pub mod watcher;
 
-use std::{error::Error, ffi::OsString, fmt, fs, os::unix::ffi::OsStringExt, path::PathBuf};
+use std::{error::Error, fmt, fs};
 
 use aegis_ebpf_common::EventType;
 use regex::Regex;
 use serde::Deserialize;
 
-use crate::{pipeline::EnrichedEvent, state::ProcessState};
+use crate::{
+    enrichment::normalization::{normalize_cmdline, normalize_unix_path},
+    pipeline::EnrichedEvent,
+    state::ProcessState,
+};
 
 /// `comm` field from a [`MemoryEvent`](aegis_ebpf_common::MemoryEvent) as a lossy UTF-8 string.
 pub fn comm_to_process_name(comm: &[u8; aegis_ebpf_common::TASK_COMM_LEN]) -> String {
@@ -76,7 +80,7 @@ pub struct Conditions {
     /// At least one substring must appear in the execve command line (prefers eBPF `execve_cmdline`, else `/proc` cmdline).
     #[serde(default)]
     pub cmdline_contains_any: Vec<String>,
-    /// Regex matched against the resolved pathname for `syscall: openat` (via `process_vm_readv` on the tracee).
+    /// Regex matched against the resolved pathname for `syscall: openat` (in-kernel pathname snapshot).
     #[serde(default)]
     pub pathname_pattern: Option<String>,
     /// Regex matched against the command-line haystack (`execve_cmdline` or inherited `cmdline_context` from the pipeline).
@@ -201,9 +205,7 @@ impl Rule {
             if event.inner.event_type != EventType::Openat {
                 return false;
             }
-            let Some(path) =
-                resolve_openat_pathname(event.inner.tgid, event.inner.flags, event.inner.addr)
-            else {
+            let Some(path) = openat_resolved_path_for_rules(event) else {
                 return false;
             };
             if !regex.is_match(&path) {
@@ -412,15 +414,34 @@ fn is_supported_syscall(syscall: &str) -> bool {
 }
 
 fn rule_cmdline_haystack(event: &EnrichedEvent) -> Option<String> {
-    if !event.inner.execve_cmdline.is_empty() {
-        return Some(event.inner.execve_cmdline.clone());
-    }
-    if let Some(ctx) = &event.cmdline_context {
+    let raw = if !event.inner.execve_cmdline.is_empty() {
+        Some(event.inner.execve_cmdline.clone())
+    } else if let Some(ctx) = &event.cmdline_context {
         if !ctx.is_empty() {
-            return Some(ctx.clone());
+            Some(ctx.clone())
+        } else {
+            None
         }
-    }
-    read_proc_cmdline_flat(event.inner.pid)
+    } else {
+        read_proc_cmdline_flat(event.inner.pid)
+    }?;
+    Some(normalize_execve_style_cmdline(&raw))
+}
+
+/// Normalize whitespace and obvious path tokens in execve/cmdline haystacks.
+fn normalize_execve_style_cmdline(s: &str) -> String {
+    let trimmed = normalize_cmdline(s);
+    trimmed
+        .split_whitespace()
+        .map(|w| {
+            if w.starts_with('/') || w.starts_with("./") || w.starts_with("../") {
+                normalize_unix_path(w)
+            } else {
+                w.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn read_proc_cmdline_flat(pid: u32) -> Option<String> {
@@ -435,43 +456,24 @@ fn read_proc_cmdline_flat(pid: u32) -> Option<String> {
     )
 }
 
-const OPENAT_PATH_READ_CAP: usize = 4096;
-
-fn resolve_openat_pathname(pid: u32, dirfd: u64, pathname_ptr: u64) -> Option<String> {
-    if pathname_ptr == 0 {
+/// Build a normalized absolute-style path for `pathname_pattern` matching.
+/// Uses in-kernel `openat_path` snapshot (no `process_vm_readv`); for relative paths, joins with
+/// `/proc/<tgid>/fd/<dirfd>` when possible.
+fn openat_resolved_path_for_rules(event: &EnrichedEvent) -> Option<String> {
+    let raw = event.inner.openat_path.trim();
+    if raw.is_empty() {
         return None;
     }
-    let raw = read_remote_cstring(pid, pathname_ptr, OPENAT_PATH_READ_CAP)?;
-    let rel = PathBuf::from(OsString::from_vec(raw));
-
-    let dfd = dirfd as i32;
-    if dfd == libc::AT_FDCWD {
-        return Some(rel.to_string_lossy().into_owned());
-    }
-
-    let proc_fd = format!("/proc/{pid}/fd/{dfd}");
-    let base = fs::read_link(&proc_fd).ok()?;
-    Some(base.join(rel).to_string_lossy().into_owned())
-}
-
-fn read_remote_cstring(pid: u32, remote_ptr: u64, max_len: usize) -> Option<Vec<u8>> {
-    let mut buf = vec![0u8; max_len];
-    let local_iov = libc::iovec {
-        iov_base: buf.as_mut_ptr().cast(),
-        iov_len: buf.len(),
+    let norm_piece = normalize_unix_path(raw);
+    let dfd = event.inner.flags as i32;
+    let path = if norm_piece.starts_with('/') || dfd == libc::AT_FDCWD {
+        norm_piece
+    } else {
+        let proc_fd = format!("/proc/{}/fd/{dfd}", event.inner.tgid);
+        let base = fs::read_link(&proc_fd).ok()?;
+        base.join(norm_piece).to_string_lossy().into_owned()
     };
-    let remote_iov = libc::iovec {
-        iov_base: remote_ptr as *mut libc::c_void,
-        iov_len: buf.len(),
-    };
-    let n = unsafe { libc::process_vm_readv(pid as libc::pid_t, &local_iov, 1, &remote_iov, 1, 0) };
-    if n <= 0 {
-        return None;
-    }
-    let n = n as usize;
-    let end = buf[..n].iter().position(|&b| b == 0).unwrap_or(n);
-    buf.truncate(end);
-    Some(buf)
+    Some(normalize_unix_path(&path))
 }
 
 fn event_cgroup_path(event: &EnrichedEvent) -> Option<String> {
@@ -532,6 +534,7 @@ mod tests {
                 flags,
                 ret: 0,
                 execve_cmdline: String::new(),
+                openat_path: String::new(),
             },
             metadata: None,
             cmdline_context: None,
@@ -835,6 +838,7 @@ rules:
                 flags: PROT_EXEC,
                 ret: 0,
                 execve_cmdline: String::new(),
+                openat_path: String::new(),
             })
             .await
             .expect("send should succeed");
@@ -885,6 +889,7 @@ rules:
                 flags: 0,
                 ret: 0,
                 execve_cmdline: String::new(),
+                openat_path: String::new(),
             },
             metadata: None,
             cmdline_context: None,

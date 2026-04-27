@@ -73,11 +73,17 @@ fn format_syscall_arguments(ev: &aegis_ebpf_common::MemoryEvent) -> Vec<String> 
             }
             v
         }
-        EventType::Openat => vec![
-            format!("pathname_ptr=0x{:x}", ev.addr),
-            format!("open_flags=0x{:x}", ev.len),
-            format!("dirfd={}", ev.flags as i64),
-        ],
+        EventType::Openat => {
+            let mut v = vec![
+                format!("pathname_ptr=0x{:x}", ev.addr),
+                format!("open_flags=0x{:x}", ev.len),
+                format!("dirfd={}", ev.flags as i64),
+            ];
+            if !ev.openat_path.is_empty() {
+                v.push(format!("pathname_snapshot={}", ev.openat_path));
+            }
+            v
+        }
         _ => vec![
             format!("addr=0x{:x}", ev.addr),
             format!("len=0x{:x}", ev.len),
@@ -185,6 +191,7 @@ mod tests {
             flags,
             ret: 0,
             execve_cmdline: String::new(),
+            openat_path: String::new(),
         }
     }
 

@@ -119,6 +119,7 @@ mod tests {
                 flags,
                 ret: 0,
                 execve_cmdline: String::new(),
+                openat_path: String::new(),
             },
             metadata: None,
             cmdline_context: None,
@@ -339,6 +340,7 @@ mod tests {
                     flags: super::PROT_EXEC,
                     ret: 0,
                     execve_cmdline: String::new(),
+                    openat_path: String::new(),
                 })
                 .await
                 .expect("send should succeed");

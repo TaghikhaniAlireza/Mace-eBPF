@@ -7,17 +7,29 @@ pub const TASK_COMM_LEN: usize = 16;
 pub const SYSCALL_ARG_COUNT: usize = 6;
 
 /// Ring-buffer sample layout version (bump when `RingBufferSample` changes).
-pub const RING_SAMPLE_LAYOUT_VERSION: u32 = 1;
+/// v2: adds `openat_path_blob` (in-kernel pathname capture for openat).
+/// v3: shrinks argv/openat blobs so `PendingEvent` fits the BPF stack (~512 B) on all tracepoints.
+/// v4: single `payload_blob` (max of argv vs openat) so eBPF `PendingEvent` holds one large buffer.
+pub const RING_SAMPLE_LAYOUT_VERSION: u32 = 4;
+
+/// Max bytes for `openat` pathname snapshot in BPF (including NUL).
+pub const OPENAT_PATH_MAX_LEN: usize = 64;
 
 /// Number of `argv[]` entries captured on `execve` (each up to [`EXECVE_ARG_MAX_LEN`] bytes).
-/// Kept small so the pending-event struct stays within the eBPF stack limit (~512 B).
-pub const EXECVE_ARGC_CAPTURE: usize = 4;
+pub const EXECVE_ARGC_CAPTURE: usize = 2;
 
 /// Max bytes per argv slot (including NUL) for eBPF `bpf_probe_read_user_str`.
-pub const EXECVE_ARG_MAX_LEN: usize = 32;
+pub const EXECVE_ARG_MAX_LEN: usize = 24;
 
 /// Total bytes for the flattened argv snapshot in [`RingBufferSample`].
 pub const EXECVE_ARGV_BLOB_LEN: usize = EXECVE_ARGC_CAPTURE * EXECVE_ARG_MAX_LEN;
+
+/// One shared byte buffer in the ring sample / BPF pending event: holds either argv snapshot or openat path.
+pub const RING_PAYLOAD_BLOB_LEN: usize = const_max(EXECVE_ARGV_BLOB_LEN, OPENAT_PATH_MAX_LEN);
+
+const fn const_max(a: usize, b: usize) -> usize {
+    if a > b { a } else { b }
+}
 
 /// Full ring-buffer record written by the eBPF program (kernel + syscall return + UID + argv blob).
 #[repr(C)]
@@ -30,7 +42,8 @@ pub struct RingBufferSample {
     pub uid: u32,
     pub _reserved: u32,
     pub layout_version: u32,
-    pub execve_argv_blob: [u8; EXECVE_ARGV_BLOB_LEN],
+    /// Execve: first [`EXECVE_ARGV_BLOB_LEN`] bytes are argv slots. Openat: first [`OPENAT_PATH_MAX_LEN`] bytes are the path.
+    pub payload_blob: [u8; RING_PAYLOAD_BLOB_LEN],
 }
 
 impl RingBufferSample {
@@ -145,30 +158,32 @@ pub struct MemoryEvent {
     pub ret: i64,
     /// Joined argv snapshot for `execve` (from eBPF user-memory reads); empty for other syscalls.
     pub execve_cmdline: alloc::string::String,
+    /// Path captured in-kernel at `sys_enter_openat` (empty when not `openat`).
+    pub openat_path: alloc::string::String,
 }
 
 #[cfg(feature = "user")]
 impl MemoryEvent {
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        let (raw, syscall_ret, uid, execve_argv_blob) =
-            if bytes.len() == RingBufferSample::wire_size() {
-                let sample =
-                    unsafe { core::ptr::read_unaligned(bytes.as_ptr() as *const RingBufferSample) };
-                if sample.layout_version != RING_SAMPLE_LAYOUT_VERSION {
-                    return None;
-                }
-                (
-                    sample.kernel,
-                    sample.syscall_ret,
-                    sample.uid,
-                    Some(sample.execve_argv_blob),
-                )
-            } else if bytes.len() == core::mem::size_of::<KernelMemoryEvent>() {
-                let raw = KernelMemoryEvent::from_bytes(bytes)?;
-                (raw, 0i64, 0u32, None)
-            } else {
+        let (raw, syscall_ret, uid, payload_blob) = if bytes.len() == RingBufferSample::wire_size()
+        {
+            let sample =
+                unsafe { core::ptr::read_unaligned(bytes.as_ptr() as *const RingBufferSample) };
+            if sample.layout_version != RING_SAMPLE_LAYOUT_VERSION {
                 return None;
-            };
+            }
+            (
+                sample.kernel,
+                sample.syscall_ret,
+                sample.uid,
+                Some(sample.payload_blob),
+            )
+        } else if bytes.len() == core::mem::size_of::<KernelMemoryEvent>() {
+            let raw = KernelMemoryEvent::from_bytes(bytes)?;
+            (raw, 0i64, 0u32, None)
+        } else {
+            return None;
+        };
 
         let event_type = EventType::from_syscall(raw.syscall)?;
 
@@ -185,9 +200,28 @@ impl MemoryEvent {
         };
 
         let execve_cmdline = if event_type == EventType::Execve {
-            execve_argv_blob
+            payload_blob
                 .as_ref()
-                .map(decode_execve_argv_blob)
+                .map(|b| {
+                    let argv: &[u8; EXECVE_ARGV_BLOB_LEN] = b[..EXECVE_ARGV_BLOB_LEN]
+                        .try_into()
+                        .expect("RING_PAYLOAD_BLOB_LEN >= EXECVE_ARGV_BLOB_LEN");
+                    decode_execve_argv_blob(argv)
+                })
+                .unwrap_or_default()
+        } else {
+            alloc::string::String::new()
+        };
+
+        let openat_path = if event_type == EventType::Openat {
+            payload_blob
+                .as_ref()
+                .map(|b| {
+                    let path: &[u8; OPENAT_PATH_MAX_LEN] = b[..OPENAT_PATH_MAX_LEN]
+                        .try_into()
+                        .expect("RING_PAYLOAD_BLOB_LEN >= OPENAT_PATH_MAX_LEN");
+                    decode_openat_path_blob(path)
+                })
                 .unwrap_or_default()
         } else {
             alloc::string::String::new()
@@ -205,6 +239,7 @@ impl MemoryEvent {
             flags,
             ret,
             execve_cmdline,
+            openat_path,
         })
     }
 }
@@ -229,6 +264,12 @@ fn decode_execve_argv_blob(blob: &[u8; EXECVE_ARGV_BLOB_LEN]) -> alloc::string::
         out.push_str(p);
     }
     out
+}
+
+#[cfg(feature = "user")]
+fn decode_openat_path_blob(blob: &[u8; OPENAT_PATH_MAX_LEN]) -> alloc::string::String {
+    let end = blob.iter().position(|&b| b == 0).unwrap_or(blob.len());
+    alloc::string::String::from_utf8_lossy(&blob[..end]).into_owned()
 }
 
 // ---------------------------------------------------------------------------
@@ -510,12 +551,9 @@ mod tests {
             let mut blob = [0u8; EXECVE_ARGV_BLOB_LEN];
             let a = b"/bin/sh\0";
             blob[..a.len()].copy_from_slice(a);
-            let b = b"-c\0";
+            let b = b"-c whoami\0";
             let off = EXECVE_ARG_MAX_LEN;
             blob[off..off + b.len()].copy_from_slice(b);
-            let c = b"whoami\0";
-            let off2 = 2 * EXECVE_ARG_MAX_LEN;
-            blob[off2..off2 + c.len()].copy_from_slice(c);
 
             let kernel = KernelMemoryEvent {
                 timestamp_ns: 1,
@@ -525,13 +563,15 @@ mod tests {
                 args: [0x1111, 0x2222, 0, 0, 0, 0],
                 comm: *b"sh\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
             };
+            let mut payload = [0u8; RING_PAYLOAD_BLOB_LEN];
+            payload[..EXECVE_ARGV_BLOB_LEN].copy_from_slice(&blob);
             let sample = RingBufferSample {
                 kernel,
                 syscall_ret: 0,
                 uid: 0,
                 _reserved: 0,
                 layout_version: RING_SAMPLE_LAYOUT_VERSION,
-                execve_argv_blob: blob,
+                payload_blob: payload,
             };
             let mut bytes = [0u8; RingBufferSample::wire_size()];
             unsafe {

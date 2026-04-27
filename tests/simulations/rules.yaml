@@ -35,7 +35,7 @@ rules:
   - id: "SIM_C_SHADOW_OPEN"
     name: "Sensitive file open (openat)"
     severity: "critical"
-    description: "Detect openat resolving to /etc/shadow (path resolved in user-space via process_vm_readv)."
+    description: "Detect openat resolving to /etc/shadow (path captured in-kernel at sys_enter_openat)."
     conditions:
       syscall: "openat"
       pathname_pattern: ".*/etc/shadow$"

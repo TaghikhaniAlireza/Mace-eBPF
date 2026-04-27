@@ -215,6 +215,7 @@ mod tests {
             flags: 0x4,
             ret: 0,
             execve_cmdline: String::new(),
+            openat_path: String::new(),
         }
     }
 

@@ -1,5 +1,7 @@
 use async_trait::async_trait;
 
+pub mod normalization;
+
 #[cfg(feature = "kubernetes")]
 pub mod kubernetes;
 #[cfg(feature = "kubernetes")]
