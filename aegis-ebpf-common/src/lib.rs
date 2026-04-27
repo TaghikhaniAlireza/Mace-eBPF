@@ -10,22 +10,17 @@ pub const SYSCALL_ARG_COUNT: usize = 6;
 /// v2: adds `openat_path_blob` (in-kernel pathname capture for openat).
 /// v3: shrinks argv/openat blobs so `PendingEvent` fits the BPF stack (~512 B) on all tracepoints.
 /// v4: single `payload_blob` (max of argv vs openat) so eBPF `PendingEvent` holds one large buffer.
-pub const RING_SAMPLE_LAYOUT_VERSION: u32 = 4;
+/// v5: full execve cmdline up to [`EXECVE_SCRATCH_LEN`] (built in per-CPU scratch in eBPF); openat prefix unchanged.
+pub const RING_SAMPLE_LAYOUT_VERSION: u32 = 5;
 
 /// Max bytes for `openat` pathname snapshot in BPF (including NUL).
 pub const OPENAT_PATH_MAX_LEN: usize = 64;
 
-/// Number of `argv[]` entries captured on `execve` (each up to [`EXECVE_ARG_MAX_LEN`] bytes).
-pub const EXECVE_ARGC_CAPTURE: usize = 2;
+/// Max bytes for concatenated `execve` argv (space-separated) in the ring buffer / scratch path.
+pub const EXECVE_SCRATCH_LEN: usize = 4096;
 
-/// Max bytes per argv slot (including NUL) for eBPF `bpf_probe_read_user_str`.
-pub const EXECVE_ARG_MAX_LEN: usize = 24;
-
-/// Total bytes for the flattened argv snapshot in [`RingBufferSample`].
-pub const EXECVE_ARGV_BLOB_LEN: usize = EXECVE_ARGC_CAPTURE * EXECVE_ARG_MAX_LEN;
-
-/// One shared byte buffer in the ring sample / BPF pending event: holds either argv snapshot or openat path.
-pub const RING_PAYLOAD_BLOB_LEN: usize = const_max(EXECVE_ARGV_BLOB_LEN, OPENAT_PATH_MAX_LEN);
+/// One shared byte buffer in the ring sample: execve fills with joined argv (NUL-padded); openat uses prefix only.
+pub const RING_PAYLOAD_BLOB_LEN: usize = const_max(EXECVE_SCRATCH_LEN, OPENAT_PATH_MAX_LEN);
 
 const fn const_max(a: usize, b: usize) -> usize {
     if a > b { a } else { b }
@@ -42,7 +37,7 @@ pub struct RingBufferSample {
     pub uid: u32,
     pub _reserved: u32,
     pub layout_version: u32,
-    /// Execve: first [`EXECVE_ARGV_BLOB_LEN`] bytes are argv slots. Openat: first [`OPENAT_PATH_MAX_LEN`] bytes are the path.
+    /// Execve: joined argv (space-separated, truncated to [`EXECVE_SCRATCH_LEN`]). Openat: first [`OPENAT_PATH_MAX_LEN`] bytes are the path.
     pub payload_blob: [u8; RING_PAYLOAD_BLOB_LEN],
 }
 
@@ -202,12 +197,7 @@ impl MemoryEvent {
         let execve_cmdline = if event_type == EventType::Execve {
             payload_blob
                 .as_ref()
-                .map(|b| {
-                    let argv: &[u8; EXECVE_ARGV_BLOB_LEN] = b[..EXECVE_ARGV_BLOB_LEN]
-                        .try_into()
-                        .expect("RING_PAYLOAD_BLOB_LEN >= EXECVE_ARGV_BLOB_LEN");
-                    decode_execve_argv_blob(argv)
-                })
+                .map(|b| decode_execve_cmdline_blob(&b[..EXECVE_SCRATCH_LEN]))
                 .unwrap_or_default()
         } else {
             alloc::string::String::new()
@@ -245,25 +235,9 @@ impl MemoryEvent {
 }
 
 #[cfg(feature = "user")]
-fn decode_execve_argv_blob(blob: &[u8; EXECVE_ARGV_BLOB_LEN]) -> alloc::string::String {
-    let mut parts = alloc::vec::Vec::<alloc::string::String>::new();
-    for slot in 0..EXECVE_ARGC_CAPTURE {
-        let off = slot * EXECVE_ARG_MAX_LEN;
-        let chunk = &blob[off..off + EXECVE_ARG_MAX_LEN];
-        let end = chunk.iter().position(|&b| b == 0).unwrap_or(chunk.len());
-        if end == 0 {
-            break;
-        }
-        parts.push(alloc::string::String::from_utf8_lossy(&chunk[..end]).into_owned());
-    }
-    let mut out = alloc::string::String::new();
-    for (i, p) in parts.iter().enumerate() {
-        if i > 0 {
-            out.push(' ');
-        }
-        out.push_str(p);
-    }
-    out
+fn decode_execve_cmdline_blob(blob: &[u8]) -> alloc::string::String {
+    let end = blob.iter().position(|&b| b == 0).unwrap_or(blob.len());
+    alloc::string::String::from_utf8_lossy(&blob[..end]).into_owned()
 }
 
 #[cfg(feature = "user")]
@@ -548,12 +522,9 @@ mod tests {
         /// Validates full ring-buffer sample with execve argv blob and UID.
         #[test]
         fn memory_event_from_ring_sample_execve_argv_and_uid() {
-            let mut blob = [0u8; EXECVE_ARGV_BLOB_LEN];
-            let a = b"/bin/sh\0";
-            blob[..a.len()].copy_from_slice(a);
-            let b = b"-c whoami\0";
-            let off = EXECVE_ARG_MAX_LEN;
-            blob[off..off + b.len()].copy_from_slice(b);
+            let joined = b"/bin/sh -c whoami";
+            let mut payload = [0u8; RING_PAYLOAD_BLOB_LEN];
+            payload[..joined.len()].copy_from_slice(joined);
 
             let kernel = KernelMemoryEvent {
                 timestamp_ns: 1,
@@ -563,8 +534,6 @@ mod tests {
                 args: [0x1111, 0x2222, 0, 0, 0, 0],
                 comm: *b"sh\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
             };
-            let mut payload = [0u8; RING_PAYLOAD_BLOB_LEN];
-            payload[..EXECVE_ARGV_BLOB_LEN].copy_from_slice(&blob);
             let sample = RingBufferSample {
                 kernel,
                 syscall_ret: 0,
@@ -585,6 +554,46 @@ mod tests {
             assert_eq!(ev.event_type, EventType::Execve);
             assert_eq!(ev.uid, 0);
             assert_eq!(ev.execve_cmdline, "/bin/sh -c whoami");
+        }
+
+        /// v5: joined cmdline can fill the full scratch; ensure a tail marker is not truncated in userspace parse.
+        #[test]
+        fn memory_event_execve_cmdline_tail_preserved_at_max_len() {
+            let mut payload = [0u8; RING_PAYLOAD_BLOB_LEN];
+            payload.fill(b'x');
+            let tail = b"Z_END_MARK_9";
+            let n = tail.len();
+            assert!(n < RING_PAYLOAD_BLOB_LEN);
+            let start = RING_PAYLOAD_BLOB_LEN - n;
+            payload[start..].copy_from_slice(tail);
+
+            let kernel = KernelMemoryEvent {
+                timestamp_ns: 1,
+                pid: 1,
+                tgid: 1,
+                syscall: 5,
+                args: [0; SYSCALL_ARG_COUNT],
+                comm: [0; TASK_COMM_LEN],
+            };
+            let sample = RingBufferSample {
+                kernel,
+                syscall_ret: 0,
+                uid: 0,
+                _reserved: 0,
+                layout_version: RING_SAMPLE_LAYOUT_VERSION,
+                payload_blob: payload,
+            };
+            let mut bytes = [0u8; RingBufferSample::wire_size()];
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    (&sample as *const RingBufferSample).cast::<u8>(),
+                    bytes.as_mut_ptr(),
+                    bytes.len(),
+                );
+            }
+            let ev = MemoryEvent::from_bytes(&bytes).expect("ring sample v5");
+            assert!(ev.execve_cmdline.ends_with("Z_END_MARK_9"));
+            assert_eq!(ev.execve_cmdline.len(), RING_PAYLOAD_BLOB_LEN);
         }
 
         /// Validates parsing of an all-zero raw kernel event for syscall id 1 (mmap with zero fields).

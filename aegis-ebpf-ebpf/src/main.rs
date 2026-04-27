@@ -2,9 +2,9 @@
 #![no_main]
 
 use aegis_ebpf_common::{
-    EXECVE_ARG_MAX_LEN, EXECVE_ARGC_CAPTURE, EXECVE_ARGV_BLOB_LEN, KernelMemoryEvent,
-    MemorySyscall, OPENAT_PATH_MAX_LEN, RING_PAYLOAD_BLOB_LEN, RING_SAMPLE_LAYOUT_VERSION,
-    RingBufferSample, SYSCALL_ARG_COUNT, TASK_COMM_LEN,
+    EXECVE_SCRATCH_LEN, KernelMemoryEvent, MemorySyscall, OPENAT_PATH_MAX_LEN,
+    RING_PAYLOAD_BLOB_LEN, RING_SAMPLE_LAYOUT_VERSION, RingBufferSample, SYSCALL_ARG_COUNT,
+    TASK_COMM_LEN,
 };
 use aya_ebpf::{
     helpers::{
@@ -12,32 +12,42 @@ use aya_ebpf::{
         bpf_probe_read_user, bpf_probe_read_user_str_bytes,
     },
     macros::{map, tracepoint},
-    maps::{LruHashMap, RingBuf},
+    maps::{LruHashMap, PerCpuArray, RingBuf},
     programs::TracePointContext,
 };
 use aya_log_ebpf::warn;
 
-const RINGBUF_SIZE_BYTES: u32 = 256 * 1024;
+const RINGBUF_SIZE_BYTES: u32 = 512 * 1024;
 const PENDING_SYSCALLS_MAX_ENTRIES: u32 = 10_240;
 const PROT_EXEC: u64 = 0x4;
 const ALLOWLIST_MAX_ENTRIES: u32 = 1_024;
 const RATE_LIMIT_MAX_ENTRIES: u32 = 10_240;
 const RATE_LIMIT_INTERVAL_NS: u64 = 100_000_000; // 100ms per PID
 
+/// Per-CPU scratch for execve argv join and zeroed payloads for other syscalls (no large stack vars).
+#[repr(C)]
+struct ScratchBuf {
+    buf: [u8; RING_PAYLOAD_BLOB_LEN],
+}
+
 #[map]
 static EVENTS: RingBuf = RingBuf::with_byte_size(RINGBUF_SIZE_BYTES, 0);
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct PendingEvent {
-    kernel: KernelMemoryEvent,
-    /// Union of execve argv slots and openat path (only one syscall populates per pending entry).
-    payload_blob: [u8; RING_PAYLOAD_BLOB_LEN],
-}
+#[map]
+static SCRATCH_ARGV: PerCpuArray<ScratchBuf> = PerCpuArray::with_max_entries(1, 0);
+
+/// Assemble [`RingBufferSample`] here (map-backed) so emit avoids ~4 KiB BPF stack temporaries.
+#[map]
+static RING_SAMPLE_OUT: PerCpuArray<RingBufferSample> = PerCpuArray::with_max_entries(1, 0);
 
 #[allow(non_upper_case_globals)]
 #[map]
-static pending_syscalls: LruHashMap<u64, PendingEvent> =
+static pending_syscalls: LruHashMap<u64, KernelMemoryEvent> =
+    LruHashMap::with_max_entries(PENDING_SYSCALLS_MAX_ENTRIES, 0);
+
+#[allow(non_upper_case_globals)]
+#[map]
+static pending_payload: LruHashMap<u64, [u8; RING_PAYLOAD_BLOB_LEN]> =
     LruHashMap::with_max_entries(PENDING_SYSCALLS_MAX_ENTRIES, 0);
 
 #[map]
@@ -51,8 +61,9 @@ static RATE_LIMIT_LAST_TS: LruHashMap<u32, u64> =
 static RATE_LIMITED_COUNT: LruHashMap<u32, u64> =
     LruHashMap::with_max_entries(RATE_LIMIT_MAX_ENTRIES, 0);
 
+static ZERO_PAYLOAD: [u8; RING_PAYLOAD_BLOB_LEN] = [0u8; RING_PAYLOAD_BLOB_LEN];
+
 fn should_rate_limit(syscall: MemorySyscall) -> bool {
-    // Rate-limit mmap→mprotect storms only at mmap; do not suppress standalone mprotect RWX (SIM_A_RWX).
     syscall == MemorySyscall::Mmap
 }
 
@@ -67,32 +78,70 @@ fn read_syscall_args(ctx: &TracePointContext) -> [u64; SYSCALL_ARG_COUNT] {
     ]
 }
 
-fn capture_openat_path(path_ptr: u64, out: &mut [u8]) {
-    if path_ptr == 0 || out.len() < OPENAT_PATH_MAX_LEN {
-        return;
-    }
-    let _ = unsafe {
-        bpf_probe_read_user_str_bytes(path_ptr as *const u8, &mut out[..OPENAT_PATH_MAX_LEN])
+/// Build joined argv in per-CPU scratch; returns written length (excluding final NUL).
+fn capture_execve_argv_into_scratch(argv_ptr: u64) -> usize {
+    let Some(ptr) = SCRATCH_ARGV.get_ptr_mut(0) else {
+        return 0;
     };
-}
+    let scratch = unsafe { &mut *ptr };
+    scratch.buf.fill(0);
 
-fn capture_execve_argv(argv_ptr: u64, out_blob: &mut [u8]) {
-    if argv_ptr == 0 || out_blob.len() < EXECVE_ARGV_BLOB_LEN {
-        return;
+    if argv_ptr == 0 {
+        return 0;
     }
+
     let argv = argv_ptr as *const u64;
-    for i in 0..EXECVE_ARGC_CAPTURE {
-        let arg_user_ptr = match unsafe { bpf_probe_read_user(argv.add(i)) } {
+    let mut off = 0usize;
+
+    for i in 0..256u32 {
+        let arg_user_ptr = match unsafe { bpf_probe_read_user(argv.add(i as usize)) } {
             Ok(p) => p,
             Err(_) => break,
         };
         if arg_user_ptr == 0 {
             break;
         }
-        let slot_off = i * EXECVE_ARG_MAX_LEN;
-        let slot = &mut out_blob[slot_off..slot_off + EXECVE_ARG_MAX_LEN];
-        let _ = unsafe { bpf_probe_read_user_str_bytes(arg_user_ptr as *const u8, slot) };
+        if i > 0 {
+            if off >= EXECVE_SCRATCH_LEN {
+                break;
+            }
+            scratch.buf[off] = b' ';
+            off += 1;
+        }
+        let remain = EXECVE_SCRATCH_LEN.saturating_sub(off);
+        if remain == 0 {
+            break;
+        }
+        let slice = &mut scratch.buf[off..off + remain];
+        let n = match unsafe { bpf_probe_read_user_str_bytes(arg_user_ptr as *const u8, slice) } {
+            Ok(b) => b.len(),
+            Err(_) => 0,
+        };
+        off = off.saturating_add(n);
+        if off >= EXECVE_SCRATCH_LEN {
+            off = EXECVE_SCRATCH_LEN;
+            break;
+        }
     }
+
+    off
+}
+
+fn capture_openat_path_into_scratch(path_ptr: u64) {
+    let Some(ptr) = SCRATCH_ARGV.get_ptr_mut(0) else {
+        return;
+    };
+    let scratch = unsafe { &mut *ptr };
+    scratch.buf.fill(0);
+    if path_ptr == 0 {
+        return;
+    }
+    let _ = unsafe {
+        bpf_probe_read_user_str_bytes(
+            path_ptr as *const u8,
+            &mut scratch.buf[..OPENAT_PATH_MAX_LEN],
+        )
+    };
 }
 
 fn store_pending_event(ctx: &TracePointContext, syscall: MemorySyscall) -> u32 {
@@ -119,27 +168,33 @@ fn store_pending_event(ctx: &TracePointContext, syscall: MemorySyscall) -> u32 {
 
     let comm = bpf_get_current_comm().unwrap_or([0; TASK_COMM_LEN]);
     let args = read_syscall_args(ctx);
-    // Build `PendingEvent` in place: separate temp `[u8; N]` arrays plus a full `PendingEvent`
-    // exceed the ~512 B BPF stack limit when LLVM keeps both alive across helper calls.
-    let mut pending = PendingEvent {
-        kernel: KernelMemoryEvent {
-            timestamp_ns: now_ns,
-            pid: pid_tgid as u32,
-            tgid,
-            syscall: syscall as u32,
-            args,
-            comm,
-        },
-        payload_blob: [0u8; RING_PAYLOAD_BLOB_LEN],
-    };
+
     if syscall == MemorySyscall::Execve {
-        capture_execve_argv(args[1], &mut pending.payload_blob[..EXECVE_ARGV_BLOB_LEN]);
+        let _len = capture_execve_argv_into_scratch(args[1]);
     } else if syscall == MemorySyscall::Openat {
-        capture_openat_path(args[1], &mut pending.payload_blob[..OPENAT_PATH_MAX_LEN]);
+        capture_openat_path_into_scratch(args[1]);
+    } else if let Some(ptr) = SCRATCH_ARGV.get_ptr_mut(0) {
+        unsafe { (*ptr).buf.fill(0) };
     }
 
-    if let Err(err) = pending_syscalls.insert(pid_tgid, pending, 0) {
+    let kernel = KernelMemoryEvent {
+        timestamp_ns: now_ns,
+        pid: pid_tgid as u32,
+        tgid,
+        syscall: syscall as u32,
+        args,
+        comm,
+    };
+
+    if let Err(err) = pending_syscalls.insert(pid_tgid, &kernel, 0) {
         warn!(ctx, "pending syscall insert failed: {}", err);
+        return 1;
+    }
+
+    let payload_ref = SCRATCH_ARGV.get(0).map(|s| &s.buf).unwrap_or(&ZERO_PAYLOAD);
+    if let Err(err) = pending_payload.insert(pid_tgid, payload_ref, 0) {
+        let _ = pending_syscalls.remove(&pid_tgid);
+        warn!(ctx, "pending payload insert failed: {}", err);
         return 1;
     }
 
@@ -150,10 +205,10 @@ fn emit_pending_event_on_success(ctx: &TracePointContext, syscall: MemorySyscall
     let pid_tgid = bpf_get_current_pid_tgid();
     let ret = unsafe { ctx.read_at::<i64>(16).unwrap_or(-1) };
     let pending = unsafe { pending_syscalls.get(&pid_tgid).copied() };
-    let Some(mut pending) = pending else { return 0 };
+    let Some(mut kernel) = pending else {
+        return 0;
+    };
 
-    // Ptrace / openat: emit on exit even when the syscall fails (e.g. EPERM) so user-space rules
-    // can detect attach attempts and sensitive-path opens.
     let always_emit = matches!(
         syscall,
         MemorySyscall::Ptrace | MemorySyscall::Openat | MemorySyscall::Execve
@@ -161,32 +216,48 @@ fn emit_pending_event_on_success(ctx: &TracePointContext, syscall: MemorySyscall
 
     if ret < 0 && !always_emit {
         let _ = pending_syscalls.remove(&pid_tgid);
+        let _ = pending_payload.remove(&pid_tgid);
         return 0;
     }
 
-    if syscall == MemorySyscall::Mprotect && (pending.kernel.args[2] & PROT_EXEC) == 0 {
+    if syscall == MemorySyscall::Mprotect && (kernel.args[2] & PROT_EXEC) == 0 {
         let _ = pending_syscalls.remove(&pid_tgid);
+        let _ = pending_payload.remove(&pid_tgid);
         return 0;
     }
 
-    pending.kernel.syscall = syscall as u32;
+    kernel.syscall = syscall as u32;
     let uid = bpf_get_current_uid_gid() as u32;
-    let sample = RingBufferSample {
-        kernel: pending.kernel,
-        syscall_ret: ret,
-        uid,
-        _reserved: 0,
-        layout_version: RING_SAMPLE_LAYOUT_VERSION,
-        payload_blob: pending.payload_blob,
+
+    let Some(out_ptr) = RING_SAMPLE_OUT.get_ptr_mut(0) else {
+        let _ = pending_syscalls.remove(&pid_tgid);
+        let _ = pending_payload.remove(&pid_tgid);
+        return 0;
     };
-    if let Some(mut entry) = EVENTS.reserve::<RingBufferSample>(0) {
-        entry.write(sample);
-        entry.submit(0);
-    } else {
-        warn!(ctx, "ring buffer reserve failed");
+
+    // Member-wise write: never `payload_blob: *src` (that copies ~4 KiB onto the BPF stack).
+    unsafe {
+        let out = &mut *out_ptr;
+        out.kernel = kernel;
+        out.syscall_ret = ret;
+        out.uid = uid;
+        out._reserved = 0;
+        out.layout_version = RING_SAMPLE_LAYOUT_VERSION;
+        if let Some(p) = pending_payload.get(&pid_tgid) {
+            out.payload_blob.copy_from_slice(p);
+        } else {
+            out.payload_blob.fill(0);
+        }
+    }
+
+    let wire_len = core::mem::size_of::<RingBufferSample>();
+    let wire = unsafe { core::slice::from_raw_parts(out_ptr.cast::<u8>(), wire_len) };
+    if EVENTS.output::<[u8]>(wire, 0).is_err() {
+        warn!(ctx, "ring buffer output failed");
     }
 
     let _ = pending_syscalls.remove(&pid_tgid);
+    let _ = pending_payload.remove(&pid_tgid);
     0
 }
 
