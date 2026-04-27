@@ -63,6 +63,23 @@ static RATE_LIMITED_COUNT: LruHashMap<u32, u64> =
 
 static ZERO_PAYLOAD: [u8; RING_PAYLOAD_BLOB_LEN] = [0u8; RING_PAYLOAD_BLOB_LEN];
 
+/// Prefer this over `[u8]::fill` on multi-KiB map-backed slices: rustc/llvm turns `fill` into a
+/// massive unrolled store sequence (~10⁶ verifier insns); the kernel verifier then loses pointer
+/// bounds (`R ? !read_ok`). A simple counted loop stays within insn limits.
+#[inline(always)]
+fn zero_scratch_buf(scratch: &mut ScratchBuf) {
+    for i in 0..EXECVE_SCRATCH_LEN {
+        scratch.buf[i] = 0;
+    }
+}
+
+#[inline(always)]
+fn zero_payload_blob(out: &mut [u8; RING_PAYLOAD_BLOB_LEN]) {
+    for i in 0..RING_PAYLOAD_BLOB_LEN {
+        out[i] = 0;
+    }
+}
+
 fn should_rate_limit(syscall: MemorySyscall) -> bool {
     syscall == MemorySyscall::Mmap
 }
@@ -84,7 +101,7 @@ fn capture_execve_argv_into_scratch(argv_ptr: u64) -> usize {
         return 0;
     };
     let scratch = unsafe { &mut *ptr };
-    scratch.buf.fill(0);
+    zero_scratch_buf(scratch);
 
     if argv_ptr == 0 {
         return 0;
@@ -132,7 +149,7 @@ fn capture_openat_path_into_scratch(path_ptr: u64) {
         return;
     };
     let scratch = unsafe { &mut *ptr };
-    scratch.buf.fill(0);
+    zero_scratch_buf(scratch);
     if path_ptr == 0 {
         return;
     }
@@ -174,7 +191,7 @@ fn store_pending_event(ctx: &TracePointContext, syscall: MemorySyscall) -> u32 {
     } else if syscall == MemorySyscall::Openat {
         capture_openat_path_into_scratch(args[1]);
     } else if let Some(ptr) = SCRATCH_ARGV.get_ptr_mut(0) {
-        unsafe { (*ptr).buf.fill(0) };
+        zero_scratch_buf(unsafe { &mut *ptr });
     }
 
     let kernel = KernelMemoryEvent {
@@ -246,7 +263,7 @@ fn emit_pending_event_on_success(ctx: &TracePointContext, syscall: MemorySyscall
         if let Some(p) = pending_payload.get(&pid_tgid) {
             out.payload_blob.copy_from_slice(p);
         } else {
-            out.payload_blob.fill(0);
+            zero_payload_blob(&mut out.payload_blob);
         }
     }
 
