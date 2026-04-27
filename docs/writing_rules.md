@@ -17,6 +17,28 @@ Rules are validated at load time (syntax, syscall names, regex fields, cross-fie
 
 There is no built-in search path list in the core library; embedders choose defaults (CLI flags, env vars, `/etc`, etc.).
 
+## Suppression (trusted processes / false-positive control)
+
+A second top-level key, `suppressions`, lists **suppression entries** that use the **same `conditions` language** as rules (no `stateful` block). When an event matches at least one suppression entry, **alerts are not fired** for that event, but rules are still evaluated. The JSON `StandardizedEvent` (FFI / Go callback) then includes:
+
+- `matched_rules` — same as without suppression (which rules would have fired),
+- `suppressed_by` — list of suppression entry `id` values that matched (alerts were suppressed because the process is considered trusted for that event pattern).
+
+If no suppression matches, `suppressed_by` is omitted from the JSON.
+
+**Example** (typical desktop JIT noise: `mprotect` with RWX on a short `comm` like `gnome-she+` may need a pattern you tune for your environment):
+
+```yaml
+suppressions:
+  - id: "TRUST_GNOME_SHELL_MPROTECT"
+    name: "Shell compositor JIT mprotect"
+    description: "gnome-shell Mutter Clutter uses executable anonymous regions; suppress mprotect RWX noise."
+    conditions:
+      syscall: "mprotect"
+      process_name_pattern: "gnome-shell|mutter|Mutter"
+      flags_contains: ["PROT_READ", "PROT_WRITE", "PROT_EXEC"]
+```
+
 ## Rule file shape
 
 Top-level key `rules` is an array of rule objects:

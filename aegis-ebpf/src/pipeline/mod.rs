@@ -414,16 +414,23 @@ async fn run_partition_worker(
         let state = state_tracker.get(event.inner.tgid);
 
         let current_rules = rules.load();
-        let matches = current_rules.evaluate(&event, state);
+        let (matches, suppressed_by) = current_rules.evaluate_with_suppressions(&event, state);
+        let suppress_alerts = !suppressed_by.is_empty();
+
         for rule in &matches {
             tracing_warn!(
                 tgid = event.inner.tgid,
                 rule_id = %rule.id,
+                suppressed = suppress_alerts,
+                suppression_ids = ?suppressed_by,
                 "Rule match detected"
             );
             #[cfg(feature = "otel")]
             OtelExporter::record_rule_match(&mut pipe_span, rule.id.as_str(), true);
             if let Some(cb) = &on_alert {
+                if suppress_alerts {
+                    continue;
+                }
                 let alert = Alert::from_rule_and_event(rule, &event);
                 cb(alert).await;
             }
@@ -434,7 +441,15 @@ async fn run_partition_worker(
         }
 
         if let Some(cb) = &on_standardized_event {
-            let std_ev = build_standardized_event_from_rules(&event, &matches);
+            let std_ev = build_standardized_event_from_rules(
+                &event,
+                &matches,
+                if suppress_alerts {
+                    Some(suppressed_by.as_slice())
+                } else {
+                    None
+                },
+            );
             match serde_json::to_string(&std_ev) {
                 Ok(json) => cb(json).await,
                 Err(e) => tracing_warn!(

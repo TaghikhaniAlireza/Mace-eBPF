@@ -43,6 +43,9 @@ pub struct StandardizedEvent {
     pub cmdline: String,
     pub arguments: Vec<String>,
     pub matched_rules: Vec<String>,
+    /// When non-empty, alerts were suppressed by YAML `suppression:` entries (matched rule ids still listed).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub suppressed_by: Vec<String>,
 }
 
 fn syscall_name_for_event(event_type: EventType) -> &'static str {
@@ -101,6 +104,7 @@ fn comm_string(comm: &[u8; aegis_ebpf_common::TASK_COMM_LEN]) -> String {
 pub fn build_standardized_event(
     ev: &EnrichedEvent,
     matched_rule_ids: &[String],
+    suppressed_by: &[String],
 ) -> StandardizedEvent {
     let cmdline = if !ev.inner.execve_cmdline.is_empty() {
         ev.inner.execve_cmdline.clone()
@@ -119,6 +123,7 @@ pub fn build_standardized_event(
         cmdline,
         arguments: format_syscall_arguments(&ev.inner),
         matched_rules: matched_rule_ids.to_vec(),
+        suppressed_by: suppressed_by.to_vec(),
     }
 }
 
@@ -126,9 +131,10 @@ pub fn build_standardized_event(
 pub fn build_standardized_event_from_rules(
     ev: &EnrichedEvent,
     matched: &[&Rule],
+    suppressed_by: Option<&[String]>,
 ) -> StandardizedEvent {
     let ids: Vec<String> = matched.iter().map(|r| r.id.clone()).collect();
-    build_standardized_event(ev, &ids)
+    build_standardized_event(ev, &ids, suppressed_by.unwrap_or(&[]))
 }
 
 impl Alert {
@@ -165,7 +171,7 @@ mod tests {
 
     use crate::{
         NoopEnricher, PipelineConfig,
-        alert::{Alert, AlertCallback},
+        alert::{Alert, AlertCallback, StandardizedEventCallback},
         pipeline::start_pipeline_from_receiver_for_tests,
         rules::Severity,
     };
@@ -212,6 +218,7 @@ mod tests {
         yaml: &str,
         event: MemoryEvent,
         on_alert: Option<AlertCallback>,
+        on_standardized_event: Option<StandardizedEventCallback>,
     ) {
         let path = unique_yaml_path("single");
         fs::write(&path, yaml).expect("rule file should be written");
@@ -220,6 +227,7 @@ mod tests {
         let cfg = PipelineConfig {
             rules_path: Some(path.clone()),
             on_alert,
+            on_standardized_event,
             reorder_window_ms: 1,
             ..PipelineConfig::default()
         };
@@ -250,6 +258,7 @@ rules:
             yaml,
             fake_event(EventType::MprotectWX, crate::rules::PROT_EXEC),
             Some(callback),
+            None,
         )
         .await;
 
@@ -271,8 +280,13 @@ rules:
       flags_contains: ["PROT_EXEC"]
 "#;
         let (alerts, callback) = callback_sink();
-        run_single_event_through_pipeline(yaml, fake_event(EventType::Mmap, 0), Some(callback))
-            .await;
+        run_single_event_through_pipeline(
+            yaml,
+            fake_event(EventType::Mmap, 0),
+            Some(callback),
+            None,
+        )
+        .await;
 
         let alerts = alerts.lock().expect("alert sink mutex poisoned");
         assert!(alerts.is_empty());
@@ -300,6 +314,7 @@ rules:
             yaml,
             fake_event(EventType::MprotectWX, crate::rules::PROT_EXEC),
             Some(callback),
+            None,
         )
         .await;
 
@@ -321,7 +336,7 @@ rules:
     conditions:
       syscall: "mmap"
 "#;
-        run_single_event_through_pipeline(yaml, fake_event(EventType::Mmap, 0), None).await;
+        run_single_event_through_pipeline(yaml, fake_event(EventType::Mmap, 0), None, None).await;
     }
 
     #[tokio::test]
@@ -336,8 +351,13 @@ rules:
       syscall: "mmap"
 "#;
         let (alerts, callback) = callback_sink();
-        run_single_event_through_pipeline(yaml, fake_event(EventType::Mmap, 0x123), Some(callback))
-            .await;
+        run_single_event_through_pipeline(
+            yaml,
+            fake_event(EventType::Mmap, 0x123),
+            Some(callback),
+            None,
+        )
+        .await;
 
         let alerts = alerts.lock().expect("alert sink mutex poisoned");
         assert_eq!(alerts.len(), 1);
@@ -347,5 +367,65 @@ rules:
         assert_eq!(alert.severity, Severity::Critical);
         assert_eq!(alert.pid, 24);
         assert_eq!(alert.matched_flags, 0x123);
+    }
+
+    fn callback_std_events() -> (Arc<Mutex<Vec<String>>>, StandardizedEventCallback) {
+        let lines = Arc::new(Mutex::new(Vec::<String>::new()));
+        let sink = Arc::clone(&lines);
+        let cb: StandardizedEventCallback = Arc::new(move |json: String| {
+            let sink = Arc::clone(&sink);
+            async move {
+                sink.lock().expect("mutex poisoned").push(json);
+            }
+            .boxed()
+        });
+        (lines, cb)
+    }
+
+    #[tokio::test]
+    async fn suppression_blocks_alerts_but_keeps_matched_rules_in_standardized_json() {
+        let yaml = r#"
+rules:
+  - id: "MEM-SUPP"
+    name: "match"
+    severity: "high"
+    description: "desc"
+    conditions:
+      syscall: "mprotect"
+      flags_contains: ["PROT_EXEC"]
+
+suppressions:
+  - id: "SUPP_UNIT_TEST_COMM"
+    name: "trusted test comm"
+    description: "suppress alerts for unit-test task name"
+    conditions:
+      syscall: "mprotect"
+      process_name_pattern: "^unit-test$"
+"#;
+        let (alerts, alert_cb) = callback_sink();
+        let (json_lines, std_cb) = callback_std_events();
+
+        run_single_event_through_pipeline(
+            yaml,
+            fake_event(EventType::MprotectWX, crate::rules::PROT_EXEC),
+            Some(alert_cb),
+            Some(std_cb),
+        )
+        .await;
+
+        assert_eq!(alerts.lock().expect("mutex").len(), 0);
+
+        let lines = json_lines.lock().expect("mutex");
+        assert_eq!(lines.len(), 1);
+        let v: serde_json::Value = serde_json::from_str(&lines[0]).expect("json");
+        assert_eq!(
+            v["matched_rules"].as_array().unwrap().len(),
+            1,
+            "matched_rules should still list detection hits"
+        );
+        assert_eq!(
+            v["suppressed_by"].as_array().unwrap()[0].as_str().unwrap(),
+            "SUPP_UNIT_TEST_COMM"
+        );
     }
 }

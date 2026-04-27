@@ -12,4 +12,6 @@ type StandardizedEvent struct {
 	Cmdline      string   `json:"cmdline"`
 	Arguments    []string `json:"arguments"`
 	MatchedRules []string `json:"matched_rules"`
+	// SuppressedBy lists suppression entry ids when alerts were suppressed (matched_rules still populated).
+	SuppressedBy []string `json:"suppressed_by,omitempty"`
 }

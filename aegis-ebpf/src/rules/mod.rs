@@ -27,6 +27,24 @@ pub const MAP_ANONYMOUS: u64 = 0x20;
 /// Linux `PTRACE_ATTACH` (used for rule matching on ptrace events).
 pub const PTRACE_ATTACH: u64 = 16;
 
+/// YAML `suppression:` entries suppress **alerts** (and clear `matched_rules` in [`crate::StandardizedEvent`])
+/// when an event matches; detection rules are still evaluated for audit (`suppressed_by` is set).
+#[derive(Clone, Debug, Deserialize)]
+pub struct SuppressionEntry {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub conditions: Conditions,
+    #[serde(skip)]
+    pub cgroup_regex: Option<Regex>,
+    #[serde(skip)]
+    pub process_name_regex: Option<Regex>,
+    #[serde(skip)]
+    pub pathname_regex: Option<Regex>,
+    #[serde(skip)]
+    pub cmdline_context_regex: Option<Regex>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Rule {
     pub id: String,
@@ -111,139 +129,174 @@ impl Rule {
     }
 
     pub fn matches_with_state(&self, event: &EnrichedEvent, state: Option<&ProcessState>) -> bool {
-        if let Some(expected) = self.conditions.syscall.as_deref()
-            && !expected.eq_ignore_ascii_case(event_syscall_name(event))
-        {
+        evaluate_rule_conditions(
+            &self.conditions,
+            self.process_name_regex.as_ref(),
+            self.cgroup_regex.as_ref(),
+            self.pathname_regex.as_ref(),
+            self.cmdline_context_regex.as_ref(),
+            event,
+            state,
+            self.stateful.as_ref(),
+        )
+    }
+}
+
+/// Shared condition evaluation for [`Rule`] and [`SuppressionEntry`] (`stateful` is ignored for suppressions).
+#[allow(clippy::too_many_arguments)] // Mirrors optional regex refs + optional state bundle.
+pub(crate) fn evaluate_rule_conditions(
+    conditions: &Conditions,
+    process_name_regex: Option<&Regex>,
+    cgroup_regex: Option<&Regex>,
+    pathname_regex: Option<&Regex>,
+    cmdline_context_regex: Option<&Regex>,
+    event: &EnrichedEvent,
+    state: Option<&ProcessState>,
+    stateful: Option<&StatefulConditions>,
+) -> bool {
+    if let Some(expected) = conditions.syscall.as_deref()
+        && !expected.eq_ignore_ascii_case(event_syscall_name(event))
+    {
+        return false;
+    }
+
+    let flags = event.inner.flags;
+    if !conditions
+        .flags_contains
+        .iter()
+        .all(|name| is_flag_present(flags, name))
+    {
+        return false;
+    }
+
+    if conditions
+        .flags_excludes
+        .iter()
+        .any(|name| is_flag_present(flags, name))
+    {
+        return false;
+    }
+
+    if let Some(min_size) = conditions.min_size
+        && event.inner.len < min_size
+    {
+        return false;
+    }
+
+    let process_name = comm_to_process_name(&event.inner.comm);
+    if let Some(regex) = process_name_regex {
+        if !regex.is_match(&process_name) {
             return false;
         }
+    }
 
-        let flags = event.inner.flags;
-        if !self
-            .conditions
-            .flags_contains
+    if let Some(regex) = cgroup_regex {
+        let Some(path) = event_cgroup_path(event) else {
+            return false;
+        };
+        if !regex.is_match(&path) {
+            return false;
+        }
+    }
+
+    if let Some(expected_uid) = conditions.uid
+        && event.inner.uid != expected_uid
+    {
+        return false;
+    }
+
+    if !conditions.argv_contains.is_empty() {
+        let Some(cmdline) = rule_cmdline_haystack(event) else {
+            return false;
+        };
+        if !conditions
+            .argv_contains
             .iter()
-            .all(|name| is_flag_present(flags, name))
+            .all(|needle| cmdline.contains(needle.as_str()))
         {
             return false;
         }
+    }
 
-        if self
-            .conditions
-            .flags_excludes
+    if !conditions.cmdline_contains_any.is_empty() {
+        let Some(cmdline) = rule_cmdline_haystack(event) else {
+            return false;
+        };
+        if !conditions
+            .cmdline_contains_any
             .iter()
-            .any(|name| is_flag_present(flags, name))
+            .any(|needle| cmdline.contains(needle.as_str()))
         {
             return false;
         }
+    }
 
-        if let Some(min_size) = self.conditions.min_size
-            && event.inner.len < min_size
+    if let Some(rx) = cmdline_context_regex {
+        let Some(cmdline) = rule_cmdline_haystack(event) else {
+            return false;
+        };
+        if !rx.is_match(&cmdline) {
+            return false;
+        }
+    }
+
+    if let Some(regex) = pathname_regex {
+        if event.inner.event_type != EventType::Openat {
+            return false;
+        }
+        let Some(path) = openat_resolved_path_for_rules(event) else {
+            return false;
+        };
+        if !regex.is_match(&path) {
+            return false;
+        }
+    }
+
+    if let Some(req) = conditions.ptrace_request {
+        if event.inner.event_type != EventType::Ptrace {
+            return false;
+        }
+        if event.inner.flags != req {
+            return false;
+        }
+    }
+
+    if let Some(stateful) = stateful {
+        let Some(state) = state else {
+            return false;
+        };
+        if let Some(min_event_count) = stateful.min_event_count
+            && state.event_count < min_event_count
         {
             return false;
         }
-
-        let process_name = comm_to_process_name(&event.inner.comm);
-        if let Some(regex) = &self.process_name_regex {
-            if !regex.is_match(&process_name) {
-                return false;
-            }
-        }
-
-        if let Some(regex) = &self.cgroup_regex {
-            let Some(path) = event_cgroup_path(event) else {
-                return false;
-            };
-            if !regex.is_match(&path) {
-                return false;
-            }
-        }
-
-        if let Some(expected_uid) = self.conditions.uid
-            && event.inner.uid != expected_uid
+        if let Some(min_mprotect_exec_count) = stateful.min_mprotect_exec_count
+            && state.mprotect_exec_count < min_mprotect_exec_count
         {
             return false;
         }
-
-        if !self.conditions.argv_contains.is_empty() {
-            let Some(cmdline) = rule_cmdline_haystack(event) else {
-                return false;
-            };
-            if !self
-                .conditions
-                .argv_contains
-                .iter()
-                .all(|needle| cmdline.contains(needle.as_str()))
-            {
-                return false;
-            }
+        if let Some(min_rwx_bytes) = stateful.min_rwx_bytes
+            && state.total_rwx_bytes < min_rwx_bytes
+        {
+            return false;
         }
+    }
 
-        if !self.conditions.cmdline_contains_any.is_empty() {
-            let Some(cmdline) = rule_cmdline_haystack(event) else {
-                return false;
-            };
-            if !self
-                .conditions
-                .cmdline_contains_any
-                .iter()
-                .any(|needle| cmdline.contains(needle.as_str()))
-            {
-                return false;
-            }
-        }
+    true
+}
 
-        if let Some(rx) = &self.cmdline_context_regex {
-            let Some(cmdline) = rule_cmdline_haystack(event) else {
-                return false;
-            };
-            if !rx.is_match(&cmdline) {
-                return false;
-            }
-        }
-
-        if let Some(regex) = &self.pathname_regex {
-            if event.inner.event_type != EventType::Openat {
-                return false;
-            }
-            let Some(path) = openat_resolved_path_for_rules(event) else {
-                return false;
-            };
-            if !regex.is_match(&path) {
-                return false;
-            }
-        }
-
-        if let Some(req) = self.conditions.ptrace_request {
-            if event.inner.event_type != EventType::Ptrace {
-                return false;
-            }
-            if event.inner.flags != req {
-                return false;
-            }
-        }
-
-        if let Some(stateful) = &self.stateful {
-            let Some(state) = state else {
-                return false;
-            };
-            if let Some(min_event_count) = stateful.min_event_count
-                && state.event_count < min_event_count
-            {
-                return false;
-            }
-            if let Some(min_mprotect_exec_count) = stateful.min_mprotect_exec_count
-                && state.mprotect_exec_count < min_mprotect_exec_count
-            {
-                return false;
-            }
-            if let Some(min_rwx_bytes) = stateful.min_rwx_bytes
-                && state.total_rwx_bytes < min_rwx_bytes
-            {
-                return false;
-            }
-        }
-
-        true
+impl SuppressionEntry {
+    pub fn matches(&self, event: &EnrichedEvent) -> bool {
+        evaluate_rule_conditions(
+            &self.conditions,
+            self.process_name_regex.as_ref(),
+            self.cgroup_regex.as_ref(),
+            self.pathname_regex.as_ref(),
+            self.cmdline_context_regex.as_ref(),
+            event,
+            None,
+            None,
+        )
     }
 }
 
@@ -282,8 +335,12 @@ pub(crate) fn validate_rule(rule: &Rule) -> Result<(), RuleError> {
             "rule name cannot be empty".into(),
         ));
     }
+    validate_conditions_structured(&rule.conditions)
+}
 
-    if let Some(syscall) = rule.conditions.syscall.as_deref()
+/// Validates [`Conditions`] shared by rules and [`SuppressionEntry`] (regex syntax only — compilation is separate).
+pub(crate) fn validate_conditions_structured(conditions: &Conditions) -> Result<(), RuleError> {
+    if let Some(syscall) = conditions.syscall.as_deref()
         && !is_supported_syscall(syscall)
     {
         return Err(RuleError::InvalidCondition(format!(
@@ -291,12 +348,8 @@ pub(crate) fn validate_rule(rule: &Rule) -> Result<(), RuleError> {
         )));
     }
 
-    // `argv_contains` / `cmdline_contains_any` apply to the command-line haystack (execve snapshot
-    // or inherited context for mmap/openat/…); any `syscall:` is allowed.
-
-    if rule.conditions.pathname_pattern.is_some() {
-        let ok = rule
-            .conditions
+    if conditions.pathname_pattern.is_some() {
+        let ok = conditions
             .syscall
             .as_deref()
             .map(|s| s.eq_ignore_ascii_case("openat"))
@@ -308,9 +361,8 @@ pub(crate) fn validate_rule(rule: &Rule) -> Result<(), RuleError> {
         }
     }
 
-    if rule.conditions.ptrace_request.is_some() {
-        let ok = rule
-            .conditions
+    if conditions.ptrace_request.is_some() {
+        let ok = conditions
             .syscall
             .as_deref()
             .map(|s| s.eq_ignore_ascii_case("ptrace"))
@@ -322,32 +374,32 @@ pub(crate) fn validate_rule(rule: &Rule) -> Result<(), RuleError> {
         }
     }
 
-    for flag in &rule.conditions.flags_contains {
+    for flag in &conditions.flags_contains {
         validate_flag_name(flag)?;
     }
-    for flag in &rule.conditions.flags_excludes {
+    for flag in &conditions.flags_excludes {
         validate_flag_name(flag)?;
     }
-    if let Some(pattern) = rule.conditions.cgroup_pattern.as_deref() {
+    if let Some(pattern) = conditions.cgroup_pattern.as_deref() {
         Regex::new(pattern).map_err(|err| {
             RuleError::InvalidCondition(format!("invalid cgroup_pattern regex '{pattern}': {err}"))
         })?;
     }
-    if let Some(pattern) = rule.conditions.process_name_pattern.as_deref() {
+    if let Some(pattern) = conditions.process_name_pattern.as_deref() {
         Regex::new(pattern).map_err(|err| {
             RuleError::InvalidCondition(format!(
                 "invalid process_name_pattern regex '{pattern}': {err}"
             ))
         })?;
     }
-    if let Some(pattern) = rule.conditions.pathname_pattern.as_deref() {
+    if let Some(pattern) = conditions.pathname_pattern.as_deref() {
         Regex::new(pattern).map_err(|err| {
             RuleError::InvalidCondition(format!(
                 "invalid pathname_pattern regex '{pattern}': {err}"
             ))
         })?;
     }
-    if let Some(pattern) = rule.conditions.cmdline_context_pattern.as_deref() {
+    if let Some(pattern) = conditions.cmdline_context_pattern.as_deref() {
         Regex::new(pattern).map_err(|err| {
             RuleError::InvalidCondition(format!(
                 "invalid cmdline_context_pattern regex '{pattern}': {err}"
@@ -355,6 +407,20 @@ pub(crate) fn validate_rule(rule: &Rule) -> Result<(), RuleError> {
         })?;
     }
     Ok(())
+}
+
+pub(crate) fn validate_suppression_entry(entry: &SuppressionEntry) -> Result<(), RuleError> {
+    if entry.id.trim().is_empty() {
+        return Err(RuleError::InvalidCondition(
+            "suppression id cannot be empty".into(),
+        ));
+    }
+    if entry.name.trim().is_empty() {
+        return Err(RuleError::InvalidCondition(
+            "suppression name cannot be empty".into(),
+        ));
+    }
+    validate_conditions_structured(&entry.conditions)
 }
 
 /// Compile regex fields on each rule after YAML parse. Call after `validate_rule` for each rule.
@@ -378,6 +444,34 @@ pub(crate) fn compile_rule_regexes(rule: &mut Rule) -> Result<(), RuleError> {
         None => None,
     };
     rule.cmdline_context_regex = match rule.conditions.cmdline_context_pattern.as_deref() {
+        Some(p) => Some(Regex::new(p).map_err(|e| {
+            RuleError::InvalidCondition(format!("cmdline_context_pattern compile error: {e}"))
+        })?),
+        None => None,
+    };
+    Ok(())
+}
+
+pub(crate) fn compile_suppression_regexes(entry: &mut SuppressionEntry) -> Result<(), RuleError> {
+    entry.cgroup_regex = match entry.conditions.cgroup_pattern.as_deref() {
+        Some(p) => Some(Regex::new(p).map_err(|e| {
+            RuleError::InvalidCondition(format!("cgroup_pattern compile error: {e}"))
+        })?),
+        None => None,
+    };
+    entry.process_name_regex = match entry.conditions.process_name_pattern.as_deref() {
+        Some(p) => Some(Regex::new(p).map_err(|e| {
+            RuleError::InvalidCondition(format!("process_name_pattern compile error: {e}"))
+        })?),
+        None => None,
+    };
+    entry.pathname_regex = match entry.conditions.pathname_pattern.as_deref() {
+        Some(p) => Some(Regex::new(p).map_err(|e| {
+            RuleError::InvalidCondition(format!("pathname_pattern compile error: {e}"))
+        })?),
+        None => None,
+    };
+    entry.cmdline_context_regex = match entry.conditions.cmdline_context_pattern.as_deref() {
         Some(p) => Some(Regex::new(p).map_err(|e| {
             RuleError::InvalidCondition(format!("cmdline_context_pattern compile error: {e}"))
         })?),
@@ -743,6 +837,7 @@ rules:
                     cmdline_context_regex: None,
                 },
             ],
+            suppressions: vec![],
         };
 
         let event = fake_enriched_event(EventType::Mmap, PROT_EXEC, 4096);
@@ -900,7 +995,7 @@ rules:
         assert_eq!(matched.len(), 1);
         assert_eq!(matched[0].id, "TEST_001");
 
-        let std_ev = crate::alert::build_standardized_event_from_rules(&ev, &matched);
+        let std_ev = crate::alert::build_standardized_event_from_rules(&ev, &matched, None);
         assert_eq!(std_ev.matched_rules, vec!["TEST_001".to_string()]);
         assert_eq!(std_ev.process_name, "cat");
 

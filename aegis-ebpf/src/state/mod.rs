@@ -218,6 +218,7 @@ mod tests {
                 pathname_regex: None,
                 cmdline_context_regex: None,
             }],
+            suppressions: vec![],
         };
 
         for n in 1..=3 {
@@ -262,6 +263,7 @@ mod tests {
                 pathname_regex: None,
                 cmdline_context_regex: None,
             }],
+            suppressions: vec![],
         };
 
         for ts in 1..=4 {
@@ -299,6 +301,7 @@ mod tests {
                 pathname_regex: None,
                 cmdline_context_regex: None,
             }],
+            suppressions: vec![],
         };
 
         let alerts = Arc::new(Mutex::new(Vec::<Alert>::new()));
