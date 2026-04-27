@@ -63,20 +63,19 @@ static RATE_LIMITED_COUNT: LruHashMap<u32, u64> =
 
 static ZERO_PAYLOAD: [u8; RING_PAYLOAD_BLOB_LEN] = [0u8; RING_PAYLOAD_BLOB_LEN];
 
-/// Prefer this over `[u8]::fill` on multi-KiB map-backed slices: rustc/llvm turns `fill` into a
-/// massive unrolled store sequence (~10⁶ verifier insns); the kernel verifier then loses pointer
-/// bounds (`R ? !read_ok`). A simple counted loop stays within insn limits.
+/// Single memset-style clear (typically one BPF helper path) — avoids 1k+ scalar stores from `fill`
+/// or naive loops that LLVM unrolls for map-backed buffers.
 #[inline(always)]
 fn zero_scratch_buf(scratch: &mut ScratchBuf) {
-    for i in 0..EXECVE_SCRATCH_LEN {
-        scratch.buf[i] = 0;
+    unsafe {
+        core::ptr::write_bytes(scratch.buf.as_mut_ptr(), 0u8, EXECVE_SCRATCH_LEN);
     }
 }
 
 #[inline(always)]
 fn zero_payload_blob(out: &mut [u8; RING_PAYLOAD_BLOB_LEN]) {
-    for i in 0..RING_PAYLOAD_BLOB_LEN {
-        out[i] = 0;
+    unsafe {
+        core::ptr::write_bytes(out.as_mut_ptr(), 0u8, RING_PAYLOAD_BLOB_LEN);
     }
 }
 
@@ -125,12 +124,12 @@ fn capture_execve_argv_into_scratch(argv_ptr: u64) -> usize {
             scratch.buf[off] = b' ';
             off += 1;
         }
-        let remain = EXECVE_SCRATCH_LEN.saturating_sub(off);
-        if remain == 0 {
+        if off >= EXECVE_SCRATCH_LEN {
             break;
         }
-        let slice = &mut scratch.buf[off..off + remain];
-        let n = match unsafe { bpf_probe_read_user_str_bytes(arg_user_ptr as *const u8, slice) } {
+        // Fixed tail slice only (avoid `buf[off..off+remain]` — verifier loses map_value bounds).
+        let tail = &mut scratch.buf[off..EXECVE_SCRATCH_LEN];
+        let n = match unsafe { bpf_probe_read_user_str_bytes(arg_user_ptr as *const u8, tail) } {
             Ok(b) => b.len(),
             Err(_) => 0,
         };
