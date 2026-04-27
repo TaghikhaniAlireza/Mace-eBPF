@@ -76,24 +76,39 @@ pub async fn start_sensor(config: SensorConfig) -> anyhow::Result<mpsc::Receiver
 
     let mut ebpf = load_ebpf().await?;
     init_ebpf_logger(&mut ebpf);
-    let syscall_tracepoints = [
-        ("sys_enter_mmap", "sys_enter_mmap"),
-        ("sys_enter_mprotect", "sys_enter_mprotect"),
-        ("sys_enter_memfd_create", "sys_enter_memfd_create"),
-        ("sys_enter_ptrace", "sys_enter_ptrace"),
+
+    // Hooks needed for exec argv, open paths, and ptrace — failure here means the sensor cannot run.
+    const REQUIRED_SYSCALL_TRACEPOINTS: &[(&str, &str)] = &[
         ("sys_enter_execve", "sys_enter_execve"),
-        ("sys_enter_openat", "sys_enter_openat"),
-        ("sys_exit_mmap", "sys_exit_mmap"),
-        ("sys_exit_mprotect", "sys_exit_mprotect"),
-        ("sys_exit_memfd_create", "sys_exit_memfd_create"),
-        ("sys_exit_ptrace", "sys_exit_ptrace"),
         ("sys_exit_execve", "sys_exit_execve"),
+        ("sys_enter_openat", "sys_enter_openat"),
         ("sys_exit_openat", "sys_exit_openat"),
+        ("sys_enter_ptrace", "sys_enter_ptrace"),
+        ("sys_exit_ptrace", "sys_exit_ptrace"),
     ];
-    for (program_name, tracepoint_name) in syscall_tracepoints {
-        attach_syscall_tracepoint(&mut ebpf, program_name, tracepoint_name).with_context(|| {
-            format!("failed to attach {program_name} to syscalls/{tracepoint_name}")
-        })?;
+
+    // Memory syscall hooks — optional so we still emit execve/openat/ptrace events if the kernel
+    // rejects one of these (EINVAL/EPERM varies by distro, lockdown, or missing tracepoint).
+    const OPTIONAL_SYSCALL_TRACEPOINTS: &[(&str, &str)] = &[
+        ("sys_enter_mmap", "sys_enter_mmap"),
+        ("sys_exit_mmap", "sys_exit_mmap"),
+        ("sys_enter_mprotect", "sys_enter_mprotect"),
+        ("sys_exit_mprotect", "sys_exit_mprotect"),
+        ("sys_enter_memfd_create", "sys_enter_memfd_create"),
+        ("sys_exit_memfd_create", "sys_exit_memfd_create"),
+    ];
+
+    for &(program_name, tracepoint_name) in REQUIRED_SYSCALL_TRACEPOINTS {
+        attach_syscall_tracepoint(&mut ebpf, program_name, tracepoint_name)?;
+    }
+    for &(program_name, tracepoint_name) in OPTIONAL_SYSCALL_TRACEPOINTS {
+        if let Err(e) = attach_syscall_tracepoint(&mut ebpf, program_name, tracepoint_name) {
+            tracing::warn!(
+                program = program_name,
+                tracepoint = tracepoint_name,
+                "optional syscall tracepoint not attached (no mmap/mprotect/memfd events for this hook): {e:#}"
+            );
+        }
     }
 
     populate_allowlist(&mut ebpf, &config.allowlist_pids)?;
@@ -165,10 +180,17 @@ fn attach_syscall_tracepoint(
 ) -> anyhow::Result<()> {
     let program: &mut TracePoint = ebpf
         .program_mut(program_name)
-        .with_context(|| format!("eBPF program {program_name} not found"))?
-        .try_into()?;
-    program.load()?;
-    program.attach("syscalls", tracepoint_name)?;
+        .with_context(|| format!("eBPF program `{program_name}` not found in loaded object"))?
+        .try_into()
+        .with_context(|| format!("program `{program_name}` is not a tracepoint"))?;
+    program.load().with_context(|| {
+        format!("failed to load eBPF program `{program_name}` (verifier/kernel)")
+    })?;
+    program
+        .attach("syscalls", tracepoint_name)
+        .with_context(|| {
+            format!("failed to attach `{program_name}` to tracepoint `syscalls/{tracepoint_name}`")
+        })?;
     Ok(())
 }
 
