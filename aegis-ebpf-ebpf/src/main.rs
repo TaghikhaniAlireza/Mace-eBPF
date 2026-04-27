@@ -133,7 +133,7 @@ fn capture_execve_argv_into_scratch(argv_ptr: u64) -> usize {
         if off >= EXECVE_SCRATCH_LEN {
             break;
         }
-        // Only zero/read the slice we need — clearing all 1024 bytes every arg explodes verifier insn count.
+        // Only zero/read the first `EXECVE_ARG_STR_MAX` bytes of the temp slot (not full scratch size).
         unsafe {
             core::ptr::write_bytes(temp.buf.as_mut_ptr(), 0u8, EXECVE_ARG_STR_MAX);
         }

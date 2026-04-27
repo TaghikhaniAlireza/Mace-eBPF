@@ -14,24 +14,22 @@ pub const SYSCALL_ARG_COUNT: usize = 6;
 /// v6: [`EXECVE_SCRATCH_LEN`] 1024 + `write_bytes` scratch clear.
 /// v7: execve reads each argv into a **second** per-CPU slot at offset 0 only — strict verifiers reject
 /// `bpf_probe_read_user_str` into `buf[off..LEN]` when `off > 0` (`invalid access … off=63 size=1023`).
-/// v8: cap per-argument read/copy (`EXECVE_ARG_STR_MAX`) and argv count — full 1024×64 memcpy paths hit the
-/// verifier insn limit (`BPF program is too large`, errno 28 / ENOSPC in practice).
-pub const RING_SAMPLE_LAYOUT_VERSION: u32 = 8;
+/// v8: cap per-arg read/copy and argv count for insn budget.
+/// v9: tighter caps (512-byte scratch, 96-byte per argv, 10 argv slots) — v8 still exceeded 1M verifier
+/// insns on strict kernels (`BPF program is too large`; userspace often reports errno 7/E2BIG or 28/ENOSPC).
+pub const RING_SAMPLE_LAYOUT_VERSION: u32 = 9;
 
 /// Max bytes for `openat` pathname snapshot in BPF (including NUL).
 pub const OPENAT_PATH_MAX_LEN: usize = 64;
 
-/// Max bytes for concatenated `execve` argv (space-separated) in the ring buffer / scratch path.
-/// Keep modest: pairing with verifier-safe zeroing (`write_bytes`) and fixed tail slices for argv reads.
-pub const EXECVE_SCRATCH_LEN: usize = 1024;
+/// Max bytes for concatenated `execve` argv (space-separated). Smaller ⇒ fewer verifier states in copy/zero paths.
+pub const EXECVE_SCRATCH_LEN: usize = 512;
 
-/// Max number of `argv[]` pointers the eBPF program walks when building the execve cmdline.
-/// Keep low: each iteration multiplies verifier state; 64× made `sys_enter_execve` exceed the 1M insn budget.
-pub const EXECVE_ARGV_MAX_ARGS: u32 = 24;
+/// Max number of `argv[]` pointers walked when building the joined cmdline (each adds verifier cost).
+pub const EXECVE_ARGV_MAX_ARGS: u32 = 10;
 
-/// Max bytes read from **one** argv string in eBPF (then appended to the joined cmdline up to [`EXECVE_SCRATCH_LEN`]).
-/// Must be modest: large `copy_nonoverlapping`/`memset` per-arg explodes verifier complexity.
-pub const EXECVE_ARG_STR_MAX: usize = 256;
+/// Max bytes read from **one** argv string before append (then capped by remaining room in scratch).
+pub const EXECVE_ARG_STR_MAX: usize = 96;
 
 /// One shared byte buffer in the ring sample: execve fills with joined argv (NUL-padded); openat uses prefix only.
 pub const RING_PAYLOAD_BLOB_LEN: usize = const_max(EXECVE_SCRATCH_LEN, OPENAT_PATH_MAX_LEN);
