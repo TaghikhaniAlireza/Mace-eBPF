@@ -191,6 +191,7 @@ fn ensure_ffi_function_declarations(header_path: &Path) -> anyhow::Result<()> {
         && content.contains("aegis_load_rules(")
         && content.contains("aegis_load_rules_file(")
         && content.contains("aegis_start_pipeline(")
+        && content.contains("aegis_set_log_level(")
     {
         return Ok(());
     }
@@ -234,6 +235,9 @@ int32_t aegis_load_rules(const char *yaml_utf8);
 int32_t aegis_load_rules_file(const char *path_utf8);
 int32_t aegis_start_pipeline(void);
 int32_t aegis_stop_pipeline(void);
+
+/* Aegis core stderr filter: 0=TRACE,1=INFO,2=SUPPRESSED,3=EVENT,4=ALERT. Returns 0 on success. */
+int32_t aegis_set_log_level(int32_t level);
 
 #ifdef __cplusplus
 } // extern "C"

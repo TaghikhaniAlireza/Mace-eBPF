@@ -602,14 +602,14 @@ fn flag_bit(name: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use std::{
-        fs, io,
-        sync::{Arc, Mutex},
+        fs,
+        sync::Arc,
         time::{SystemTime, UNIX_EPOCH},
     };
 
     use aegis_ebpf_common::{EventType, MemoryEvent};
+    use serial_test::serial;
     use tokio::sync::mpsc;
-    use tracing_subscriber::fmt::MakeWriter;
 
     use super::{loader::RuleSet, *};
     use crate::{NoopEnricher, PipelineConfig, pipeline};
@@ -853,35 +853,11 @@ rules:
         assert!(set.evaluate(&event, None).is_empty());
     }
 
-    #[derive(Clone)]
-    struct LogBuffer(Arc<Mutex<Vec<u8>>>);
-
-    impl<'a> MakeWriter<'a> for LogBuffer {
-        type Writer = LogBufferWriter;
-
-        fn make_writer(&'a self) -> Self::Writer {
-            LogBufferWriter(Arc::clone(&self.0))
-        }
-    }
-
-    struct LogBufferWriter(Arc<Mutex<Vec<u8>>>);
-
-    impl io::Write for LogBufferWriter {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.0
-                .lock()
-                .expect("log buffer mutex poisoned")
-                .extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-
     #[tokio::test(flavor = "current_thread")]
+    #[serial(aegis_log)]
     async fn integration_rule_match_logs_and_passthroughs() {
+        crate::logging::reset_test_log_state();
+
         let yaml = r#"
 rules:
   - id: "MEM-T1"
@@ -898,14 +874,6 @@ rules:
             .as_nanos();
         let path = std::env::temp_dir().join(format!("aegis-rule-test-{unique}.yaml"));
         fs::write(&path, yaml).expect("rule file should be written");
-
-        let logs = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = tracing_subscriber::fmt()
-            .with_ansi(false)
-            .with_writer(LogBuffer(Arc::clone(&logs)))
-            .with_max_level(tracing::Level::WARN)
-            .finish();
-        let _guard = tracing::subscriber::set_default(subscriber);
 
         let (raw_tx, raw_rx) = mpsc::channel(8);
         let config = PipelineConfig {
@@ -944,13 +912,13 @@ rules:
         handle.shutdown().await;
         let _ = fs::remove_file(path);
 
-        let logs = String::from_utf8(logs.lock().expect("log buffer mutex poisoned").clone())
-            .expect("logs should be valid utf-8");
+        let aegis_logs = crate::logging::take_test_logs();
         assert!(
-            logs.contains("Rule match detected"),
-            "expected rule-match warning in logs"
+            aegis_logs
+                .iter()
+                .any(|(_, line)| line.contains("MEM-T1") && line.contains("[ALERT]")),
+            "expected Aegis ALERT log with rule id, got: {aegis_logs:?}"
         );
-        assert!(logs.contains("MEM-T1"), "expected matched rule id in logs");
     }
 
     #[test]

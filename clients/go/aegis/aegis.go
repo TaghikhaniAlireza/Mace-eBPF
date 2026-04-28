@@ -86,6 +86,27 @@ func StopPipeline() error {
 	return nil
 }
 
+// LogLevel mirrors aegis_set_log_level (0=TRACE … 4=ALERT).
+type LogLevel int32
+
+const (
+	LogLevelTrace      LogLevel = 0
+	LogLevelInfo       LogLevel = 1
+	LogLevelSuppressed LogLevel = 2
+	LogLevelEvent      LogLevel = 3
+	LogLevelAlert      LogLevel = 4
+)
+
+// SetLogLevel sets the minimum Aegis core log severity for [Aegis][LEVEL] lines on stderr.
+// Call after InitEngine or anytime; invalid levels return an error.
+func SetLogLevel(level LogLevel) error {
+	rc := C.aegis_set_log_level(C.int32_t(level))
+	if rc != 0 {
+		return fmt.Errorf("aegis: SetLogLevel(%d) failed (rc=%d)", level, rc)
+	}
+	return nil
+}
+
 type cString struct {
 	ptr *C.char
 }

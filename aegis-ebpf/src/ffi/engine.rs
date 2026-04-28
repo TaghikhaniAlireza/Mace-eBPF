@@ -184,3 +184,19 @@ pub extern "C" fn aegis_stop_pipeline() -> i32 {
     stop_engine_inner();
     super::handle::AegisErrorCode::Success as i32
 }
+
+/// Set the minimum **Aegis** log severity for core diagnostics (`[Aegis][LEVEL] …` on stderr).
+///
+/// `level` must be `0` = TRACE, `1` = INFO, `2` = SUPPRESSED, `3` = EVENT, `4` = ALERT.
+/// Invalid values return [`AegisErrorCode::InitFailed`]. Thread-safe; may be called before
+/// `aegis_engine_init` or at any time while the library is loaded.
+#[unsafe(no_mangle)]
+pub extern "C" fn aegis_set_log_level(level: i32) -> i32 {
+    if !(0..=4).contains(&level) {
+        return super::handle::AegisErrorCode::InitFailed as i32;
+    }
+    if let Some(lvl) = crate::AegisLogLevel::from_u8(level as u8) {
+        crate::logging::set_filter_floor(lvl);
+    }
+    super::handle::AegisErrorCode::Success as i32
+}

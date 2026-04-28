@@ -167,6 +167,7 @@ mod tests {
 
     use aegis_ebpf_common::{EventType, MemoryEvent};
     use futures::FutureExt;
+    use serial_test::serial;
     use tokio::sync::mpsc;
 
     use crate::{
@@ -242,6 +243,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial(aegis_log)]
     async fn callback_called_on_rule_match() {
         let yaml = r#"
 rules:
@@ -268,6 +270,7 @@ rules:
     }
 
     #[tokio::test]
+    #[serial(aegis_log)]
     async fn callback_not_called_when_no_match() {
         let yaml = r#"
 rules:
@@ -293,6 +296,7 @@ rules:
     }
 
     #[tokio::test]
+    #[serial(aegis_log)]
     async fn callback_called_once_per_matched_rule() {
         let yaml = r#"
 rules:
@@ -326,6 +330,7 @@ rules:
     }
 
     #[tokio::test]
+    #[serial(aegis_log)]
     async fn no_callback_pipeline_still_works() {
         let yaml = r#"
 rules:
@@ -340,6 +345,7 @@ rules:
     }
 
     #[tokio::test]
+    #[serial(aegis_log)]
     async fn alert_fields_populated_correctly() {
         let yaml = r#"
 rules:
@@ -383,6 +389,7 @@ rules:
     }
 
     #[tokio::test]
+    #[serial(aegis_log)]
     async fn suppression_blocks_alerts_but_keeps_matched_rules_in_standardized_json() {
         let yaml = r#"
 rules:

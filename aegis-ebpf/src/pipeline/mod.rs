@@ -13,14 +13,14 @@ use log::warn;
 #[cfg(feature = "otel")]
 use opentelemetry::trace::Span;
 use tokio::sync::{mpsc, oneshot};
-use tracing::warn as tracing_warn;
 
 #[cfg(feature = "otel")]
 use crate::observability::otel::OtelExporter;
 use crate::{
-    ContextEnricher, PodMetadata, SensorConfig,
+    ContextEnricher, PodMetadata, SensorConfig, aegis_log,
     alert::{Alert, AlertCallback, StandardizedEventCallback, build_standardized_event_from_rules},
     cmdline_context::CmdlineContextTracker,
+    logging,
     observability::metrics::{
         record_event_ingested as record_pipeline_event_ingested, record_pipeline_latency,
         update_reorder_buffer_size, update_worker_queue_depth,
@@ -417,13 +417,35 @@ async fn run_partition_worker(
         let (matches, suppressed_by) = current_rules.evaluate_with_suppressions(&event, state);
         let suppress_alerts = !suppressed_by.is_empty();
 
+        if logging::is_enabled(logging::AegisLogLevel::Event) {
+            let matched_ids: Vec<&str> = matches.iter().map(|r| r.id.as_str()).collect();
+            if suppress_alerts {
+                aegis_log!(
+                    Suppressed,
+                    "tgid={} syscall={:?} matched_rules={:?} suppressed_by={:?}",
+                    event.inner.tgid,
+                    event.inner.event_type,
+                    matched_ids,
+                    suppressed_by
+                );
+            } else if matches.is_empty() {
+                aegis_log!(
+                    Event,
+                    "tgid={} syscall={:?} matched_rules=[]",
+                    event.inner.tgid,
+                    event.inner.event_type
+                );
+            }
+        }
+
         for rule in &matches {
-            tracing_warn!(
-                tgid = event.inner.tgid,
-                rule_id = %rule.id,
-                suppressed = suppress_alerts,
-                suppression_ids = ?suppressed_by,
-                "Rule match detected"
+            aegis_log!(
+                Alert,
+                "tgid={} rule_id={} suppressed={} suppression_ids={:?}",
+                event.inner.tgid,
+                rule.id,
+                suppress_alerts,
+                suppressed_by
             );
             #[cfg(feature = "otel")]
             OtelExporter::record_rule_match(&mut pipe_span, rule.id.as_str(), true);
@@ -452,11 +474,12 @@ async fn run_partition_worker(
             );
             match serde_json::to_string(&std_ev) {
                 Ok(json) => cb(json).await,
-                Err(e) => tracing_warn!(
-                    syscall = ?event.inner.event_type,
-                    tgid = event.inner.tgid,
-                    error = %e,
-                    "StandardizedEvent JSON serialization failed (event skipped for FFI)"
+                Err(e) => aegis_log!(
+                    Info,
+                    "StandardizedEvent JSON serialization failed syscall={:?} tgid={} error={}",
+                    event.inner.event_type,
+                    event.inner.tgid,
+                    e
                 ),
             }
         }
@@ -534,14 +557,20 @@ mod tests {
     use std::{collections::HashMap, sync::Arc, time::Duration};
 
     use aegis_ebpf_common::{EventType, MemoryEvent};
+    use arc_swap::ArcSwap;
     use async_trait::async_trait;
+    use serial_test::serial;
     use tokio::sync::mpsc;
 
     use super::{
         EnrichedEvent, PipelineHandle, config, route_partition_index,
-        start_pipeline_from_receiver_for_tests,
+        start_pipeline_from_receiver_for_tests, start_pipeline_from_receiver_for_tests_with_rules,
     };
-    use crate::{ContextEnricher, NoopEnricher, PodMetadata};
+    use crate::{
+        ContextEnricher, NoopEnricher, PodMetadata,
+        logging::{self, take_test_logs},
+        rules::{Conditions, Rule, Severity, loader::RuleSet},
+    };
 
     fn fake_event(timestamp_ns: u64, tgid: u32, pid: u32) -> MemoryEvent {
         MemoryEvent {
@@ -554,6 +583,29 @@ mod tests {
             addr: 0x1000,
             len: 4096,
             flags: 0,
+            ret: 0,
+            execve_cmdline: String::new(),
+            openat_path: String::new(),
+        }
+    }
+
+    fn fake_event_typed(
+        timestamp_ns: u64,
+        tgid: u32,
+        pid: u32,
+        event_type: EventType,
+        flags: u64,
+    ) -> MemoryEvent {
+        MemoryEvent {
+            timestamp_ns,
+            tgid,
+            pid,
+            uid: 0,
+            comm: [0; 16],
+            event_type,
+            addr: 0x1000,
+            len: 4096,
+            flags,
             ret: 0,
             execve_cmdline: String::new(),
             openat_path: String::new(),
@@ -886,5 +938,137 @@ mod tests {
         assert_eq!(counts.get(&2), Some(&2));
         assert_eq!(counts.get(&3), Some(&2));
         assert_eq!(counts.get(&4), Some(&2));
+    }
+
+    #[tokio::test]
+    #[serial(aegis_log)]
+    async fn aegis_log_level_alert_hides_event_telemetry() {
+        logging::reset_test_log_state();
+        logging::set_filter_floor(logging::AegisLogLevel::Alert);
+
+        let rules = Arc::new(ArcSwap::from_pointee(RuleSet {
+            rules: vec![],
+            suppressions: vec![],
+        }));
+        let (raw_tx, raw_rx) = mpsc::channel(8);
+        let cfg = config::PipelineConfig {
+            reorder_window_ms: 1,
+            ..config::PipelineConfig::default()
+        };
+        let mut handle = start_pipeline_from_receiver_for_tests_with_rules(
+            raw_rx,
+            cfg,
+            Arc::new(NoopEnricher),
+            rules,
+        );
+
+        raw_tx
+            .send(fake_event_typed(1, 7, 7, EventType::Mmap, 0))
+            .await
+            .expect("send");
+        let _ = handle.next_event().await;
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let logs = take_test_logs();
+        assert!(
+            logs.is_empty(),
+            "EVENT lines should be suppressed at ALERT floor, got: {logs:?}"
+        );
+
+        logging::set_filter_floor(logging::AegisLogLevel::Trace);
+        handle.shutdown().await;
+    }
+
+    #[tokio::test]
+    #[serial(aegis_log)]
+    async fn aegis_log_level_event_shows_telemetry_no_rules() {
+        logging::reset_test_log_state();
+        logging::set_filter_floor(logging::AegisLogLevel::Event);
+
+        let rules = Arc::new(ArcSwap::from_pointee(RuleSet {
+            rules: vec![],
+            suppressions: vec![],
+        }));
+        let (raw_tx, raw_rx) = mpsc::channel(8);
+        let cfg = config::PipelineConfig {
+            reorder_window_ms: 1,
+            ..config::PipelineConfig::default()
+        };
+        let mut handle = start_pipeline_from_receiver_for_tests_with_rules(
+            raw_rx,
+            cfg,
+            Arc::new(NoopEnricher),
+            rules,
+        );
+
+        raw_tx
+            .send(fake_event_typed(2, 8, 8, EventType::Mmap, 0))
+            .await
+            .expect("send");
+        let _ = handle.next_event().await;
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let logs = take_test_logs();
+        assert!(
+            logs.iter().any(|(_, line)| line.contains("[EVENT]")),
+            "expected EVENT log, got: {logs:?}"
+        );
+
+        logging::set_filter_floor(logging::AegisLogLevel::Trace);
+        handle.shutdown().await;
+    }
+
+    #[tokio::test]
+    #[serial(aegis_log)]
+    async fn aegis_log_level_alert_still_shows_rule_match() {
+        logging::reset_test_log_state();
+        logging::set_filter_floor(logging::AegisLogLevel::Alert);
+
+        let rules = Arc::new(ArcSwap::from_pointee(RuleSet {
+            rules: vec![Rule {
+                id: "LOG-TEST-R1".into(),
+                name: "n".into(),
+                severity: Severity::High,
+                description: "d".into(),
+                conditions: Conditions {
+                    syscall: Some("mmap".into()),
+                    ..Default::default()
+                },
+                stateful: None,
+                cgroup_regex: None,
+                process_name_regex: None,
+                pathname_regex: None,
+                cmdline_context_regex: None,
+            }],
+            suppressions: vec![],
+        }));
+        let (raw_tx, raw_rx) = mpsc::channel(8);
+        let cfg = config::PipelineConfig {
+            reorder_window_ms: 1,
+            ..config::PipelineConfig::default()
+        };
+        let mut handle = start_pipeline_from_receiver_for_tests_with_rules(
+            raw_rx,
+            cfg,
+            Arc::new(NoopEnricher),
+            rules,
+        );
+
+        raw_tx
+            .send(fake_event_typed(3, 9, 9, EventType::Mmap, 0))
+            .await
+            .expect("send");
+        let _ = handle.next_event().await;
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let logs = take_test_logs();
+        assert!(
+            logs.iter()
+                .any(|(_, line)| line.contains("[ALERT]") && line.contains("LOG-TEST-R1")),
+            "expected ALERT log for rule match, got: {logs:?}"
+        );
+
+        logging::set_filter_floor(logging::AegisLogLevel::Trace);
+        handle.shutdown().await;
     }
 }

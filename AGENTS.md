@@ -38,6 +38,8 @@ The binary must run with **root privileges** (`.cargo/config.toml` sets `runner 
 sudo RUST_LOG=info ./target/release/aegis-ebpf
 ```
 
+**Aegis core log filter (optional):** `AEGIS_LOG_LEVEL=TRACE|INFO|SUPPRESSED|EVENT|ALERT` filters `[Aegis][LEVEL] …` lines on stderr from the Rust pipeline (independent of `RUST_LOG`). Embedded callers can use `aegis_set_log_level(0..4)` instead.
+
 ### Cloud VM limitation
 
 The Cursor Cloud VM runs inside a Firecracker microVM whose kernel does not expose full eBPF tracepoint support. The binary **builds successfully** but fails at runtime with `BPF_PROG_LOAD syscall returned Invalid argument (os error 22)`. This is a kernel environment limitation, not a code bug. Build, check, test, clippy, and fmt all work correctly.

@@ -60,6 +60,7 @@ opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic", "trace"], opt
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 libc = { workspace = true }
+serial_test = "3"
 
 [[bench]]
 name = "arena_benchmark"

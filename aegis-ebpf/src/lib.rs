@@ -13,12 +13,14 @@ pub mod alert;
 pub mod cmdline_context;
 pub mod enrichment;
 pub mod ffi;
+pub mod logging;
 pub mod observability;
 pub mod passwd;
 pub mod pipeline;
 pub mod proto;
 pub mod rules;
 pub mod state;
+
 use aegis_ebpf_common::MemoryEvent;
 pub use alert::{Alert, AlertCallback, StandardizedEvent, StandardizedEventCallback};
 use anyhow::Context as _;
@@ -30,6 +32,7 @@ use aya::{
 pub use enrichment::{ContextEnricher, NoopEnricher, PodMetadata};
 pub use ffi::event_callback::{JsonCallback, register_event_callback, unregister_event_callback};
 use log::{debug, warn};
+pub use logging::AegisLogLevel;
 use tracing_subscriber::{EnvFilter, prelude::*};
 
 static FFI_LOG_ONCE: Once = Once::new();
@@ -48,6 +51,7 @@ pub(crate) fn init_logging_for_ffi() {
             .with(filter)
             .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
             .try_init();
+        logging::apply_env_log_level();
     });
 }
 pub use pipeline::{
@@ -103,10 +107,12 @@ pub async fn start_sensor(config: SensorConfig) -> anyhow::Result<mpsc::Receiver
     }
     for &(program_name, tracepoint_name) in OPTIONAL_SYSCALL_TRACEPOINTS {
         if let Err(e) = attach_syscall_tracepoint(&mut ebpf, program_name, tracepoint_name) {
-            tracing::warn!(
-                program = program_name,
-                tracepoint = tracepoint_name,
-                "optional syscall tracepoint not attached (no mmap/mprotect/memfd events for this hook): {e:#}"
+            aegis_log!(
+                Info,
+                "optional syscall tracepoint not attached program={} tracepoint={}: {:#}",
+                program_name,
+                tracepoint_name,
+                e
             );
         }
     }

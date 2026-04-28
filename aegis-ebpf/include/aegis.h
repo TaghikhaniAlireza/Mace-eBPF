@@ -121,6 +121,9 @@ int32_t aegis_load_rules_file(const char *path_utf8);
 int32_t aegis_start_pipeline(void);
 int32_t aegis_stop_pipeline(void);
 
+/* Aegis core stderr filter: 0=TRACE,1=INFO,2=SUPPRESSED,3=EVENT,4=ALERT. Returns 0 on success. */
+int32_t aegis_set_log_level(int32_t level);
+
 #ifdef __cplusplus
 } // extern "C"
 #endif
