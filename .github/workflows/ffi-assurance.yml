@@ -10,8 +10,28 @@ name: FFI assurance
 on:
   push:
     branches: [main]
+    paths:
+      - ".github/workflows/ffi-assurance.yml"
+      - "run_memory_checks.sh"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "aegis-ebpf/**"
+      - "aegis-ebpf-common/**"
+      - "aegis-ebpf-ebpf/**"
   pull_request:
     branches: [main]
+    paths:
+      - ".github/workflows/ffi-assurance.yml"
+      - "run_memory_checks.sh"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "aegis-ebpf/**"
+      - "aegis-ebpf-common/**"
+      - "aegis-ebpf-ebpf/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -26,7 +46,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Install nightly Rust (Miri + rust-src for build.rs)
         uses: dtolnay/rust-toolchain@nightly

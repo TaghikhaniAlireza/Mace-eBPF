@@ -13,6 +13,22 @@ on:
     branches: [main]
     tags:
       - "v*"
+    paths:
+      - ".github/workflows/docker-publish.yml"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "aegis-ebpf/**"
+      - "aegis-ebpf-common/**"
+      - "aegis-ebpf-ebpf/**"
+      - "aegis-ebpf-loader/**"
+      - "clients/go/**"
+      - "packaging/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -29,7 +45,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Image name (GHCR requires lowercase owner)
         id: image
@@ -69,10 +87,10 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          provenance: mode=max
-          sbom: true
+          provenance: false
+          sbom: false
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,mode=min
 
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3.7.0

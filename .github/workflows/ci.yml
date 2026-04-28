@@ -29,27 +29,68 @@ name: CI
 on:
   push:
     branches: [main]
+    paths:
+      - ".github/workflows/ci.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rustfmt.toml"
+      - "aegis-ebpf/**"
+      - "aegis-ebpf-common/**"
+      - "aegis-ebpf-ebpf/**"
+      - "aegis-ebpf-loader/**"
+      - "clients/go/**"
+      - "aegis-ebpf/pkg/**"
+      - "aegis-ebpf/python/**"
+      - "scripts/**"
+      - "run_memory_checks.sh"
+      - "Makefile"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "packaging/**"
   pull_request:
     branches: [main]
+    paths:
+      - ".github/workflows/ci.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rustfmt.toml"
+      - "aegis-ebpf/**"
+      - "aegis-ebpf-common/**"
+      - "aegis-ebpf-ebpf/**"
+      - "aegis-ebpf-loader/**"
+      - "clients/go/**"
+      - "aegis-ebpf/pkg/**"
+      - "aegis-ebpf/python/**"
+      - "scripts/**"
+      - "run_memory_checks.sh"
+      - "Makefile"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "packaging/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # Use Node 24 for JS actions where supported (reduces Node 20 deprecation noise on runners).
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  # Runs in parallel with `build-and-test` (no `needs:`). Add `needs: [lint-and-audit]` to
-  # `build-and-test` if you want lint to gate the matrix.
   lint-and-audit:
     name: Lint and audit
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
-      # Install nightly first, then stable last so **stable** is the default `cargo` toolchain
-      # (plain `cargo clippy` would otherwise resolve to nightly, which has no clippy here).
       - name: Install nightly Rust (rustfmt + build-std for aegis-ebpf build.rs)
         uses: dtolnay/rust-toolchain@nightly
         with:
@@ -60,8 +101,6 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      # Same toolchain inputs as `build-and-test` so `aegis-ebpf/build.rs` (prost, nested eBPF)
-      # can run under `cargo clippy`.
       - name: Install eBPF and build dependencies
         run: |
           set -euxo pipefail
@@ -88,28 +127,24 @@ jobs:
       - name: rustfmt (nightly)
         run: cargo +nightly fmt --all -- --check
 
-      # Exclude `aegis-ebpf-ebpf`: `no_std` BPF crate, not clippy'd for the host target.
       - name: clippy
         run: cargo +stable clippy --workspace --exclude aegis-ebpf-ebpf --all-targets -- -D warnings
 
-      # `cargo audit` consults the RustSec advisory DB (includes CVSS metadata where published).
-      # Prefer `cargo deny` + `deny.toml` for licenses/bans/yanking; there is no `deny.toml` yet.
       - name: Install cargo-audit
         run: cargo install cargo-audit
 
       - name: cargo audit (dependencies)
         run: cargo audit
 
-  # Go + Python FFI smoke tests: Go links `libaegis_ebpf.a` statically; Python ctypes still uses `libaegis_ebpf.so`.
-  # Paths: Go module is `aegis-ebpf/pkg/aegis` (not `./bindings/go`). Python package is `aegis-ebpf/python`.
   ffi-bindings-test:
     name: FFI bindings (Go + Python)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
-      # `aegis-ebpf` build.rs needs nightly + rust-src + same native toolchain as other jobs.
       - name: Install nightly Rust (eBPF / build-std)
         uses: dtolnay/rust-toolchain@nightly
         with:
@@ -144,8 +179,6 @@ jobs:
       - name: Build shared library (debug)
         run: cargo build -p aegis-ebpf --verbose
 
-      # --- Go + Python toolchains (cached: speeds repeat CI; `go mod download` still runs below).
-      # v6+ uses Node 24 (v5 targets Node 20 → deprecation warning when runners force Node 24).
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
@@ -160,9 +193,7 @@ jobs:
           cache: pip
           cache-dependency-path: aegis-ebpf/python/setup.py
 
-      # Prefetch modules while installing pytest (I/O overlap). Both need the checkout + Rust artifacts for later tests.
       - name: Prefetch Go modules and Python test deps
-        shell: bash
         run: |
           set -euxo pipefail
           ROOT="${GITHUB_WORKSPACE}"
@@ -175,10 +206,7 @@ jobs:
           wait "${pip_pid}"
           wait "${go_pid}"
 
-      # Go (`-race`) and Python tests are independent; run in parallel to shorten wall-clock.
-      # Go links the Rust core statically (no LD_LIBRARY_PATH). Python still loads `.so` via ctypes.
       - name: Go and Python tests (parallel)
-        shell: bash
         env:
           CGO_ENABLED: "1"
         run: |
@@ -210,19 +238,18 @@ jobs:
     name: Build and test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         os:
-          # - ubuntu-18.04  # uncomment only if your GitHub plan still provides this runner
-          # - ubuntu-20.04  # often stuck queued — GitHub pool is tiny/deprecated; use 22.04+ or self-hosted
           - ubuntu-22.04
           - ubuntu-24.04
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
-      # Nightly first (rust-src for nested eBPF build), then stable so plain `cargo` is stable.
       - name: Install nightly Rust (eBPF / build-std)
         uses: dtolnay/rust-toolchain@nightly
         with:
@@ -231,17 +258,13 @@ jobs:
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy, rust-src
+          components: rustfmt, clippy
 
-      # --- Cargo cache: registry + git dependencies + `target/` (speeds rebuilds).
       - name: Cache Cargo home and build artifacts
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "${{ matrix.os }}"
 
-      # --- Native packages: LLVM/clang, libelf/zlib, kernel UAPI headers.
-      #     `bpftool` is not a real package on Ubuntu — it is a virtual package satisfied by
-      #     `linux-tools-$(uname -r)` or `linux-cloud-tools-$(uname -r)`.
       - name: Install eBPF and build dependencies
         run: |
           set -euxo pipefail
@@ -266,7 +289,6 @@ jobs:
           fi
           command -v bpftool && bpftool version || true
 
-      # --- bpf-linker: required by `aegis-ebpf-ebpf/build.rs` (undeclared binary dep).
       - name: Install bpf-linker
         run: cargo install bpf-linker --version 0.10.3
 
@@ -278,16 +300,12 @@ jobs:
           cargo build -p aegis-ebpf --features prometheus --verbose
           cargo test -p aegis-ebpf --features prometheus --test observability_integration --verbose
 
-      # Median ceilings for hot paths (see scripts/ci/criterion_gate.py). ~5% slack vs typical CI.
       - name: Criterion regression gate (arena + rule engine)
         run: |
           set -euxo pipefail
           cargo bench -p aegis-ebpf --bench rule_engine_bench --bench arena_benchmark -- --noplot 2>&1 \
             | python3 scripts/ci/criterion_gate.py
 
-      # `ebpf_overhead_bench` compares multiplicative slowdown vs baseline; debug builds + noisy
-      # GitHub runners (esp. ubuntu-22.04) often land ~3.2–3.5× (see issue: margin over 3.0× cap).
-      # Keep stricter defaults locally; relax only for CI via env (see tests/ebpf_overhead_bench.rs).
       - name: Run tests (sudo, full BPF suite)
         env:
           AEGIS_MPROTECT_SLOWDOWN_MAX: "4"
