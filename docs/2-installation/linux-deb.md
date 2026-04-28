@@ -2,6 +2,8 @@
 
 The repository ships an **`aegis-agent`** Debian package built with **[nFPM](https://github.com/goreleaser/nfpm)**. The package definition lives at **`packaging/nfpm.yaml`**.
 
+The **`.deb`** installs **`aegis-agent`**, default **`/etc/aegis/config.yaml`** and **`/etc/aegis/rules.yaml`**, **`libaegis_ebpf.so`** (for Python/dynamic users), and **`aegis.service`**. See [Who uses Aegis](../1-getting-started/audiences.md) for operator vs developer paths.
+
 ## Package contents
 
 | Installed path | Source | Notes |

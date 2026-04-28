@@ -10,6 +10,8 @@ Run the pre-built **aegis-agent** from GitHub Container Registry (GHCR) without 
 
 ## One command
 
+For a **five-minute trial** without installing a `.deb`, use the container (see [Audiences: who uses Aegis](./audiences.md) for roles and alternatives).
+
 GHCR image path (**GitHub owner must be lowercase**):
 
 ```bash

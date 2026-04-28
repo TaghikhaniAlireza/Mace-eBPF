@@ -26,6 +26,7 @@
 
 ## Next steps
 
-1. **[Quickstart](./quickstart.md)** — run the published container image with Docker.
-2. **[Installation: Linux .deb](../2-installation/linux-deb.md)** — install the packaged agent on Debian/Ubuntu.
-3. **[Architecture](../3-concepts/architecture.md)** — understand components before customizing rules.
+1. **[Who uses Aegis, and how?](./audiences.md)** — choose your path: operator, analyst/researcher, or developer (Go / Python).
+2. **[Quickstart](./quickstart.md)** — run the published container image with Docker.
+3. **[Installation: Linux .deb](../2-installation/linux-deb.md)** — install the packaged agent on Debian/Ubuntu.
+4. **[Architecture](../3-concepts/architecture.md)** — understand components before customizing rules.
