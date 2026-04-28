@@ -1,4 +1,4 @@
-# Quick start: Aegis agent container
+# Quick start: container image
 
 Run the pre-built **aegis-agent** from GitHub Container Registry (GHCR) without compiling from source.
 
@@ -10,7 +10,7 @@ Run the pre-built **aegis-agent** from GitHub Container Registry (GHCR) without 
 
 ## One command
 
-GHCR image path (**owner must be lowercase**):
+GHCR image path (**GitHub owner must be lowercase**):
 
 ```bash
 docker run --rm -it --privileged \
@@ -76,7 +76,7 @@ aegis-agent: engine running (rules="/etc/aegis/rules.yaml"); send SIGTERM or SIG
 
 If the kernel or environment cannot load BPF programs, **`StartPipeline`** fails and the process exits with an error (common on some microVMs or locked-down hosts).
 
-When the engine is running, **`events.log`** receives JSON lines (one per observed syscall after rule evaluation) with fields such as `syscall_name`, `matched_rules`, and `suppressed_by`.
+When the engine is running, **`events.log`** receives JSON lines (one per observed syscall after rule evaluation) with fields such as `syscall_name`, `matched_rules`, and `suppressed_by`. See [Events and alerts](../3-concepts/events-and-alerts.md).
 
 ## Stop the container
 
@@ -85,9 +85,9 @@ When the engine is running, **`events.log`** receives JSON lines (one per observ
 
 ## Tags
 
-- **`latest`** — built from the **`main`** branch (see GitHub Actions workflow **Docker**).
+- **`latest`** — built from the **`main`** branch (GitHub Actions workflow **Docker**).
 - **`v1.2.3`** etc. — built from matching Git tags; images are **cosign-signed** (keyless). Verify with the [Cosign documentation](https://docs.sigstore.dev/cosign/overview/).
 
 ## Image size
 
-The default image uses a small **distroless** runtime (glibc). The first published build may be larger than 50MB because the static agent still links a sizeable Rust core; trimming further would require a dedicated musl/static-musl build pipeline.
+The default image uses a small **distroless** runtime (glibc). The image may exceed 50MB because the static agent embeds a large Rust core; further shrinking would require a dedicated musl or split-artifact layout.

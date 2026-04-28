@@ -68,7 +68,7 @@ RUN go build -tags aegis_static_release -ldflags="-s -w" -trimpath \
 FROM gcr.io/distroless/cc-debian12:nonroot
 
 # distroless/nonroot cannot load BPF; default image is for *artifact distribution*.
-# Quick-start overrides user to root — see docs/quickstart.md.
+# Quick-start overrides user to root — see docs/1-getting-started/quickstart.md.
 COPY --from=go-builder /out/aegis-agent /usr/bin/aegis-agent
 COPY packaging/config.yaml /etc/aegis/config.yaml
 COPY packaging/rules.yaml /etc/aegis/rules.yaml

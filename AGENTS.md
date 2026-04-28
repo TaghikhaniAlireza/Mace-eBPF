@@ -38,7 +38,7 @@ The binary must run with **root privileges** (`.cargo/config.toml` sets `runner 
 sudo RUST_LOG=info ./target/release/aegis-ebpf
 ```
 
-**Aegis core log filter (optional):** `AEGIS_LOG_LEVEL=TRACE|INFO|SUPPRESSED|EVENT|ALERT` filters `[Aegis][LEVEL] …` lines on stderr from the Rust pipeline (independent of `RUST_LOG`). Embedded callers can use `aegis_set_log_level(0..4)` instead. See [docs/aegis_log_level.md](docs/aegis_log_level.md) for behavior (including why `ALERT` can still show `suppressed=true` inside `[Aegis][ALERT]` lines, and how that differs from the Go example’s stdout labels).
+**Aegis core log filter (optional):** `AEGIS_LOG_LEVEL=TRACE|INFO|SUPPRESSED|EVENT|ALERT` filters `[Aegis][LEVEL] …` lines on stderr from the Rust pipeline (independent of `RUST_LOG`). Embedded callers can use `aegis_set_log_level(0..4)` instead. See [docs/4-configuration/logging.md](docs/4-configuration/logging.md) for behavior (including why `ALERT` can still show `suppressed=true` inside `[Aegis][ALERT]` lines, and how that differs from the Go example’s stdout labels).
 
 ### Cloud VM limitation
 

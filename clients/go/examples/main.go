@@ -14,7 +14,7 @@
 //	AEGIS_RULES_FILE=/absolute/path/to/rules.yaml
 //
 // Optional: AEGIS_LOG_LEVEL=TRACE|INFO|SUPPRESSED|EVENT|ALERT filters Rust [Aegis][LEVEL] lines on stderr
-// (see docs/aegis_log_level.md). This example calls SetLogLevel after InitEngine when the env var is set.
+// (see docs/4-configuration/logging.md). This example calls SetLogLevel after InitEngine when the env var is set.
 //
 // For a minimal demo only (whoami), set:
 //
@@ -165,7 +165,7 @@ func main() {
 
 	fmt.Println("Aegis monitor running. Rules:", rulesLabel)
 	fmt.Println("Stdout labels (ALERT / EVENT / SUPPRESSED_*): from Client.Events() — not filtered by AEGIS_LOG_LEVEL.")
-	fmt.Println("Stderr [Aegis][LEVEL] lines: filtered by AEGIS_LOG_LEVEL — see docs/aegis_log_level.md")
+	fmt.Println("Stderr [Aegis][LEVEL] lines: filtered by AEGIS_LOG_LEVEL — see docs/4-configuration/logging.md")
 	fmt.Println("Try: whoami  |  python3 tests/simulations/attack_simulator.py  (from repo root)")
 	fmt.Println("Ctrl+C to exit.")
 

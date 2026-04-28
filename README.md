@@ -23,7 +23,7 @@
 | **Bounded kernel state** | `BPF_MAP_TYPE_LRU_HASH` for pending syscall entries helps cap memory under fork/syscall churn; rate limiting on hot paths protects the ring buffer under synthetic “JIT storm” load. |
 | **High-throughput user-space path** | The FFI `EventArena` (SPSC ring) is micro-benchmarked for **O(1)** push/pop; stress tests have reported on the order of **~3.2M events/s** for the Rust-driven JIT-storm simulator through the arena (workload- and hardware-dependent). |
 | **Multi-language FFI** | **Go** (`cgo`) and **Python** (`ctypes`) wrappers with explicit lifecycle (`Close` / context managers), plus optional **Prometheus** / **OpenTelemetry** feature flags in the Rust crate. |
-| **CI/CD** | GitHub Actions: lint, audit, multi-OS build/test, Go/Python binding smoke tests, and **tag-driven releases** shipping `libaegis_ebpf.so`, `libaegis_ebpf.a`, and `aegis.h` (see [`.github/workflows/release.yml`](./.github/workflows/release.yml)). |
+| **CI/CD** | GitHub Actions: lint, audit, multi-OS build/test, Go/Python binding smoke tests, **tag-driven releases** (`.deb` + FFI tarball), **GHCR** images with cosign (see [`.github/workflows/`](./.github/workflows/)). |
 
 ---
 
@@ -44,7 +44,9 @@ eBPF does not run on macOS; you can cross-compile the Linux binary and copy arti
 
 ## Docker (pre-built image)
 
-See **[docs/quickstart.md](./docs/quickstart.md)** for `docker run --privileged … ghcr.io/taghikhanialireza/aegis-ebpf:latest` (GHCR publishes on pushes to `main` and on `v*` tags).
+See **[docs/1-getting-started/quickstart.md](./docs/1-getting-started/quickstart.md)** for `docker run --privileged … ghcr.io/taghikhanialireza/aegis-ebpf:latest` (GHCR publishes on pushes to `main` and on `v*` tags).
+
+Full documentation index: **[docs/README.md](./docs/README.md)**.
 
 ## Installation
 
@@ -163,7 +165,7 @@ cd aegis-ebpf/python && pip install -e . && pytest tests/ -v
 
 ```text
 .
-├── aegis-ebpf/              # Main Rust crate: userspace SDK, FFI (cdylib), optional k8s / observability
+├── aegis-ebpf/              # Main Rust crate: userspace SDK, FFI (cdylib/staticlib), optional k8s / observability
 │   ├── src/                 # lib.rs, pipeline, rules, ffi/, …
 │   ├── include/             # Generated aegis.h (C FFI)
 │   ├── pkg/aegis/           # Go module: cgo bindings, Sensor, Arena, protobuf
@@ -171,7 +173,10 @@ cd aegis-ebpf/python && pip install -e . && pytest tests/ -v
 ├── aegis-ebpf-ebpf/         # no_std eBPF programs (tracepoints, maps, ring buffer)
 ├── aegis-ebpf-common/       # Shared types (user + kernel layouts)
 ├── aegis-ebpf-loader/       # Minimal loader binary (daemon mode for VM/matrix tests)
-├── .github/workflows/       # CI (lint, build, tests, FFI) + release on v* tags
+├── clients/go/              # Go SDK (aegis), aegis-agent, examples
+├── docs/                    # Structured technical documentation (see docs/README.md)
+├── packaging/               # nfpm (.deb), systemd unit, default config/rules
+├── .github/workflows/       # CI, release (tarball + .deb), Docker (GHCR)
 ├── scripts/vm/              # Vagrant / kernel-matrix and stress-suite scripts
 ├── AGENTS.md                # Agent/toolchain notes for contributors
 └── README.md                # This file
@@ -181,8 +186,9 @@ cd aegis-ebpf/python && pip install -e . && pytest tests/ -v
 
 ## Documentation and testing
 
+- **[docs/README.md](./docs/README.md)** — Documentation map (getting started, installation, concepts, configuration, developer guide, references).
 - **[AGENTS.md](./AGENTS.md)** — Rust stable/nightly, `bpf-linker`, and common `cargo` commands.
-- **[docs/PHASE_1_TO_4_AUDIT_REPORT.md](./docs/PHASE_1_TO_4_AUDIT_REPORT.md)** — Blueprint audit (tests, Miri/ASAN, matrix, FFI).
+- **[docs/6-references/audits/PHASE_1_TO_4_AUDIT_REPORT.md](./docs/6-references/audits/PHASE_1_TO_4_AUDIT_REPORT.md)** — Blueprint audit (tests, Miri/ASAN, matrix, FFI).
 - **Integration tests** under `aegis-ebpf/tests/` (many require root + full BPF; see test module docs and `sudo` + `--ignored` invocations).
 
 ---

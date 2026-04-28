@@ -1,6 +1,6 @@
 # Default rules shipped with aegis-agent (placeholder — customize for your environment).
 #
-# See docs/writing_rules.md in the upstream repository for the full schema.
+# See docs/3-concepts/rules-engine.md in the upstream repository for the full schema.
 
 rules:
   - id: "PLACEHOLDER_EXECVE_WHOAMI"
