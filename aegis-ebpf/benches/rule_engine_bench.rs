@@ -1,10 +1,6 @@
 //! Criterion benchmarks for rule evaluation and state tracker hot paths.
 
-use aegis_ebpf::{
-    EnrichedEvent,
-    rules::loader::RuleSet,
-    state::StateTracker,
-};
+use aegis_ebpf::{EnrichedEvent, rules::loader::RuleSet, state::StateTracker};
 use aegis_ebpf_common::{EventType, MemoryEvent};
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 
