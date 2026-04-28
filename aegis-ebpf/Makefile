@@ -8,7 +8,7 @@ EXAMPLES_DIR := examples
 
 CC      := cc
 CFLAGS  := -Wall -Wextra -std=c11 -g
-LDFLAGS := -L$(TARGET_DIR) -l$(LIB_NAME) -Wl,-rpath,$(TARGET_DIR)
+LDFLAGS := $(TARGET_DIR)/libaegis_ebpf.a -ldl -lpthread -lm -lgcc_s
 
 .PHONY: all build header c-test rust-test clean
 
@@ -24,7 +24,7 @@ header: build
 	@echo "Header generated at $(INCLUDE_DIR)/aegis.h"
 	@sed -n '1,20p' $(INCLUDE_DIR)/aegis.h
 
-## Compile and run the C smoke test
+## Compile and run the C smoke test (statically linked to libaegis_ebpf.a)
 c-test: build
 	$(CC) $(CFLAGS) \
 	    -o $(TARGET_DIR)/c_smoke_test \

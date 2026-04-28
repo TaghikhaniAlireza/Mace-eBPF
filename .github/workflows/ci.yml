@@ -100,7 +100,7 @@ jobs:
       - name: cargo audit (dependencies)
         run: cargo audit
 
-  # Go + Python FFI smoke tests against `target/debug/libaegis_ebpf.so`.
+  # Go + Python FFI smoke tests: Go links `libaegis_ebpf.a` statically; Python ctypes still uses `libaegis_ebpf.so`.
   # Paths: Go module is `aegis-ebpf/pkg/aegis` (not `./bindings/go`). Python package is `aegis-ebpf/python`.
   ffi-bindings-test:
     name: FFI bindings (Go + Python)
@@ -160,7 +160,7 @@ jobs:
           cache: pip
           cache-dependency-path: aegis-ebpf/python/setup.py
 
-      # Prefetch modules while installing pytest (I/O overlap). Both only need the checkout + `.so` path for later tests.
+      # Prefetch modules while installing pytest (I/O overlap). Both need the checkout + Rust artifacts for later tests.
       - name: Prefetch Go modules and Python test deps
         shell: bash
         run: |
@@ -176,17 +176,14 @@ jobs:
           wait "${go_pid}"
 
       # Go (`-race`) and Python tests are independent; run in parallel to shorten wall-clock.
-      # Both only read `libaegis_ebpf.so` — no shared mutable state between processes.
+      # Go links the Rust core statically (no LD_LIBRARY_PATH). Python still loads `.so` via ctypes.
       - name: Go and Python tests (parallel)
         shell: bash
         env:
           CGO_ENABLED: "1"
-          CGO_LDFLAGS: "-L${{ github.workspace }}/target/debug -laegis_ebpf -Wl,-rpath,${{ github.workspace }}/target/debug"
-          LD_LIBRARY_PATH: "${{ github.workspace }}/target/debug"
         run: |
           set -euxo pipefail
           ROOT="${GITHUB_WORKSPACE}"
-          export LD_LIBRARY_PATH="${ROOT}/target/debug:${LD_LIBRARY_PATH:-}"
 
           ( cd "${ROOT}/aegis-ebpf/pkg/aegis" && go test -race -v ./... ) &
           go_pid=$!

@@ -77,7 +77,7 @@ aegis-ebpf-ebpf = { path = "../aegis-ebpf-ebpf" }
 [lib]
 name = "aegis_ebpf"
 path = "src/lib.rs"
-crate-type = ["cdylib", "rlib"]
+crate-type = ["cdylib", "staticlib", "rlib"]
 
 [[bin]]
 name = "aegis-ebpf"

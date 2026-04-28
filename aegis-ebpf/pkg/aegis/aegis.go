@@ -7,7 +7,10 @@ package aegis
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/../../include
-#cgo LDFLAGS: -L${SRCDIR}/../../../target/debug -laegis_ebpf -Wl,-rpath,${SRCDIR}/../../../target/debug
+// Static link (no libaegis_ebpf.so). Default: debug artifact — `cargo build -p aegis-ebpf`.
+// Release: `cargo build --release -p aegis-ebpf` then `go build -tags aegis_static_release`.
+#cgo !aegis_static_release LDFLAGS: ${SRCDIR}/../../../target/debug/libaegis_ebpf.a -ldl -lpthread -lm -lgcc_s
+#cgo aegis_static_release LDFLAGS: ${SRCDIR}/../../../target/release/libaegis_ebpf.a -ldl -lpthread -lm -lgcc_s
 
 #include <stdlib.h>
 #include "aegis.h"

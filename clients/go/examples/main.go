@@ -1,9 +1,12 @@
 // Example security monitor: register JSON callback, load YAML rules, start embedded engine.
 //
-// From `clients/go/examples`, after `cargo build -p aegis-ebpf`:
+// From `clients/go/examples`, after `cargo build -p aegis-ebpf` (links target/debug/libaegis_ebpf.a):
 //
-//	export LD_LIBRARY_PATH="/path/to/Aegis-eBPF/target/debug:$LD_LIBRARY_PATH"
-//	sudo env PATH="$PATH" LD_LIBRARY_PATH="$LD_LIBRARY_PATH" CGO_ENABLED=1 go run -tags cgo .
+//	sudo env PATH="$PATH" CGO_ENABLED=1 go run .
+//
+// Release Rust + static link: `cargo build --release -p aegis-ebpf` then:
+//
+//	sudo env PATH="$PATH" CGO_ENABLED=1 go run -tags aegis_static_release .
 //
 // Production-style default: `/etc/aegis/rules.yaml` when that file exists (override with env).
 // Otherwise falls back to repo `tests/simulations/rules.yaml` (three levels up). Override with:

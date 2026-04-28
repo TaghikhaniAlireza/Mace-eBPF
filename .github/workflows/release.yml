@@ -1,7 +1,7 @@
 # =============================================================================
 # Aegis-eBPF — GitHub Release (FFI artifacts)
 # =============================================================================
-# Pushing a tag `v*` builds the release `libaegis_ebpf.so`, bundles it with `aegis.h`,
+# Pushing a tag `v*` builds the release `libaegis_ebpf.so` + `libaegis_ebpf.a`, bundles them with `aegis.h`,
 # and publishes a GitHub Release with `aegis-ebpf-linux-amd64.tar.gz`.
 #
 # `aegis-ebpf` requires nightly + `rust-src` + `bpf-linker` for the nested eBPF build (same as CI).
@@ -66,6 +66,7 @@ jobs:
           mkdir -p "${STAGE}"
 
           cp -v target/release/libaegis_ebpf.so "${STAGE}/"
+          cp -v target/release/libaegis_ebpf.a "${STAGE}/"
 
           HEADER="${GITHUB_WORKSPACE}/aegis-ebpf/include/aegis.h"
           if [[ -f "${HEADER}" ]]; then

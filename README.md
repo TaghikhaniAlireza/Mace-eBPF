@@ -2,7 +2,7 @@
 
 **The missing piece in real-time detection of code injection, memory anomalies, and suspicious behavior across Linux, cloud-native deployments, and Kubernetes ecosystems, with multi-language support.**
 
-**Aegis-eBPF** is a high-performance, production-oriented **Linux eBPF** security and monitoring SDK. The core is written in **Rust** (userspace + [`aya`](https://github.com/aya-rs/aya) eBPF programs) with **CO-RE** (Compile Once — Run Everywhere) so a single BPF object can load across supported kernels. **Go** and **Python** bindings provide a stable **C ABI** (`libaegis_ebpf.so`) for integrating memory-event pipelines and protobuf alerts into your stack.
+**Aegis-eBPF** is a high-performance, production-oriented **Linux eBPF** security and monitoring SDK. The core is written in **Rust** (userspace + [`aya`](https://github.com/aya-rs/aya) eBPF programs) with **CO-RE** (Compile Once — Run Everywhere) so a single BPF object can load across supported kernels. **Go** (`cgo`) links the Rust userspace core **statically** via `libaegis_ebpf.a` (no `LD_LIBRARY_PATH` for the Go path). **Python** (`ctypes`) loads the same FFI through the **`libaegis_ebpf.so`** `cdylib` plus `aegis.h`.
 
 ---
 
@@ -23,7 +23,7 @@
 | **Bounded kernel state** | `BPF_MAP_TYPE_LRU_HASH` for pending syscall entries helps cap memory under fork/syscall churn; rate limiting on hot paths protects the ring buffer under synthetic “JIT storm” load. |
 | **High-throughput user-space path** | The FFI `EventArena` (SPSC ring) is micro-benchmarked for **O(1)** push/pop; stress tests have reported on the order of **~3.2M events/s** for the Rust-driven JIT-storm simulator through the arena (workload- and hardware-dependent). |
 | **Multi-language FFI** | **Go** (`cgo`) and **Python** (`ctypes`) wrappers with explicit lifecycle (`Close` / context managers), plus optional **Prometheus** / **OpenTelemetry** feature flags in the Rust crate. |
-| **CI/CD** | GitHub Actions: lint, audit, multi-OS build/test, Go/Python binding smoke tests, and **tag-driven releases** shipping `libaegis_ebpf.so` + `aegis.h` (see [`.github/workflows/release.yml`](./.github/workflows/release.yml)). |
+| **CI/CD** | GitHub Actions: lint, audit, multi-OS build/test, Go/Python binding smoke tests, and **tag-driven releases** shipping `libaegis_ebpf.so`, `libaegis_ebpf.a`, and `aegis.h` (see [`.github/workflows/release.yml`](./.github/workflows/release.yml)). |
 
 ---
 
@@ -48,10 +48,11 @@ eBPF does not run on macOS; you can cross-compile the Linux binary and copy arti
 
 On each **`v*`** tag push, [`.github/workflows/release.yml`](./.github/workflows/release.yml) publishes **`aegis-ebpf-linux-amd64.tar.gz`** containing:
 
-- `libaegis_ebpf.so` — Rust `cdylib` with arena + alert-channel FFI
+- `libaegis_ebpf.so` — Rust `cdylib` (Python `ctypes` and any dynamic consumers)
+- `libaegis_ebpf.a` — Rust `staticlib` (recommended for **Go** `cgo`; see below)
 - `aegis.h` — C header for `cgo` / `ctypes`
 
-Extract and point your linker / `LD_LIBRARY_PATH` / `CGO_LDFLAGS` at the directory containing these files (see **Usage** below).
+**Python:** add the extract directory to **`LD_LIBRARY_PATH`** (or install the `.so` into the loader search path). **Go:** point **`CGO_CFLAGS`** at the directory with **`aegis.h`** and **`CGO_LDFLAGS`** at **`libaegis_ebpf.a`** plus `-ldl -lpthread -lm -lgcc_s`, or use the in-repo packages which already embed those flags (debug vs release is selected with the **`aegis_static_release`** build tag — see **Usage** below).
 
 ### Build from source
 
@@ -59,8 +60,8 @@ Extract and point your linker / `LD_LIBRARY_PATH` / `CGO_LDFLAGS` at the directo
 # Clone and build the workspace (release recommended for production)
 cargo build --release
 
-# Shared library output (Linux x86_64 default target)
-ls -la target/release/libaegis_ebpf.so
+# Shared + static library output (Linux x86_64 default target)
+ls -la target/release/libaegis_ebpf.so target/release/libaegis_ebpf.a
 
 # Generated C header (from build script / cbindgen)
 ls -la aegis-ebpf/include/aegis.h
@@ -74,7 +75,7 @@ Building **`aegis-ebpf`** triggers compilation of the **`aegis-ebpf-ebpf`** prog
 
 ### Go (`cgo`)
 
-The Go module lives under **`aegis-ebpf/pkg/aegis`** (module path: `github.com/aegis-ebpf/sdk/pkg/aegis`). Set **`CGO_CFLAGS`** to the directory containing **`aegis.h`** and **`CGO_LDFLAGS`** / **`LD_LIBRARY_PATH`** to the directory containing **`libaegis_ebpf.so`**.
+The Go module lives under **`aegis-ebpf/pkg/aegis`** (module path: `github.com/TaghikhaniAlireza/aegis-ebpf/sdk/pkg/aegis`). The package **`#cgo`** directives link **`libaegis_ebpf.a`** from **`target/debug`** by default. After **`cargo build --release -p aegis-ebpf`**, build or test Go with **`-tags aegis_static_release`** so the linker uses **`target/release/libaegis_ebpf.a`**. You do **not** set **`LD_LIBRARY_PATH`** for this Go path. To override paths in your own module, set **`CGO_CFLAGS=-I.../aegis-ebpf/include`** and **`CGO_LDFLAGS=.../libaegis_ebpf.a -ldl -lpthread -lm -lgcc_s`**.
 
 ```go
 package main
@@ -83,7 +84,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/TaghikhaniAlireza/aegis-ebpf/sdk/pkg/aegis"
+	"github.com/aegis-ebpf/sdk/pkg/aegis"
 )
 
 func main() {
@@ -114,11 +115,13 @@ func main() {
 }
 ```
 
-Run tests against a locally built `.so` (from repo root):
+Run tests against a locally built static library (from repo root):
 
 ```bash
 cargo build -p aegis-ebpf
 ./aegis-ebpf/pkg/aegis/run_go_tests.sh
+# Or: make go-test
+# After `cargo build --release -p aegis-ebpf`: AEGIS_GO_STATIC_RELEASE=1 ./aegis-ebpf/pkg/aegis/run_go_tests.sh
 ```
 
 For a higher-level API with channels, see **`aegis.NewSensor`** and **`aegis.DefaultConfig()`** in [`aegis-ebpf/pkg/aegis/sensor.go`](./aegis-ebpf/pkg/aegis/sensor.go).

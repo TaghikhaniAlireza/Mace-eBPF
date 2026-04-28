@@ -1,11 +1,14 @@
-// Package aegis is a thin Go client over the Aegis-eBPF Rust cdylib, including JSON event callbacks.
+// Package aegis is a thin Go client over the Aegis-eBPF Rust core (statically linked), including JSON event callbacks.
 //
 // Log level FFI: see aegis_set_log_level in aegis-ebpf/include/aegis.h — wrapped by [SetLogLevel] / [InitEngineWithConfig].
 package aegis
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/../../../aegis-ebpf/include
-#cgo LDFLAGS: -L${SRCDIR}/../../../target/debug -laegis_ebpf -Wl,-rpath,${SRCDIR}/../../../target/debug
+// Static link the Rust core (no libaegis_ebpf.so / LD_LIBRARY_PATH). Default: debug — `cargo build -p aegis-ebpf`.
+// Release: `cargo build --release -p aegis-ebpf` then `go build -tags aegis_static_release`.
+#cgo !aegis_static_release LDFLAGS: ${SRCDIR}/../../../target/debug/libaegis_ebpf.a -ldl -lpthread -lm -lgcc_s
+#cgo aegis_static_release LDFLAGS: ${SRCDIR}/../../../target/release/libaegis_ebpf.a -ldl -lpthread -lm -lgcc_s
 #include "aegis.h"
 #include <stdlib.h>
 
