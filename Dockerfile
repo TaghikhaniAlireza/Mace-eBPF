@@ -52,6 +52,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=rust-builder /src /src
 
+# Go module + agent (not part of the Rust workspace tree copied above)
+COPY clients/go /src/clients/go
+
 WORKDIR /src/clients/go
 
 ENV CGO_ENABLED=1
