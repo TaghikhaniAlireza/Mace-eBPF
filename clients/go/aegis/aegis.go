@@ -1,4 +1,4 @@
-// Package aegis is a thin Go client over the Aegis-eBPF Rust core (statically linked), including JSON event callbacks.
+// Package aegis is a thin Go client over the Aegis-eBPF Rust core (statically linked), with channel-based delivery of structured events.
 //
 // Log level FFI: see aegis_set_log_level in aegis-ebpf/include/aegis.h — wrapped by [SetLogLevel] / [InitEngineWithConfig].
 package aegis
@@ -30,10 +30,87 @@ import (
 	"unsafe"
 )
 
+// AegisEvent is the JSON shape emitted by the Rust pipeline after rule evaluation
+// (serde_json of `aegis_ebpf::StandardizedEvent`). All syscall observations are delivered here;
+// use MatchedRules / SuppressedBy to classify alerts vs telemetry.
+type AegisEvent struct {
+	Timestamp    uint64   `json:"timestamp"`
+	PID          uint32   `json:"pid"`
+	UID          uint32   `json:"uid"`
+	Username     string   `json:"username"`
+	ProcessName  string   `json:"process_name"`
+	SyscallName  string   `json:"syscall_name"`
+	Cmdline      string   `json:"cmdline"`
+	Arguments    []string `json:"arguments"`
+	MatchedRules []string `json:"matched_rules"`
+	// SuppressedBy lists suppression entry ids when alerts were suppressed (matched_rules still populated).
+	SuppressedBy []string `json:"suppressed_by,omitempty"`
+}
+
+// Client receives structured JSON events from the Rust core on a buffered channel (single active client per process).
+type Client struct {
+	eventsChan chan AegisEvent
+}
+
 var (
-	userCallbackMu sync.RWMutex
-	userCallback   func(StandardizedEvent)
+	activeClientMu sync.Mutex
+	activeClient   *Client // non-nil while Rust JSON callback may fire
 )
+
+const defaultEventBuffer = 256
+
+// NewClient registers the global FFI JSON sink and returns a client whose [Client.Events] channel receives [AegisEvent] values.
+// Only one [Client] may be active at a time; a second [NewClient] returns an error until the first is [Client.Close]d.
+// eventBuffer is the channel buffer capacity; values < 1 default to 256.
+func NewClient(eventBuffer int) (*Client, error) {
+	if eventBuffer < 1 {
+		eventBuffer = defaultEventBuffer
+	}
+	activeClientMu.Lock()
+	defer activeClientMu.Unlock()
+	if activeClient != nil {
+		return nil, errors.New("aegis: NewClient: another client is already active; Close it first")
+	}
+	c := &Client{eventsChan: make(chan AegisEvent, eventBuffer)}
+	activeClient = c
+	C.aegis_register_json_callback_bridge()
+	return c, nil
+}
+
+// Events returns the receive-only channel fed from the C/Rust JSON callback. The channel is closed when [Client.Close] is called.
+func (c *Client) Events() <-chan AegisEvent {
+	return c.eventsChan
+}
+
+// Close unregisters the FFI callback, clears the active client, and closes the events channel.
+// It is safe to call once; subsequent calls return an error.
+func (c *Client) Close() error {
+	activeClientMu.Lock()
+	defer activeClientMu.Unlock()
+	if activeClient != c {
+		return errors.New("aegis: Close: invalid or already closed client")
+	}
+	activeClient = nil
+	C.unregister_event_callback()
+	close(c.eventsChan)
+	return nil
+}
+
+func pushAegisEventJSON(payload string) {
+	activeClientMu.Lock()
+	c := activeClient
+	activeClientMu.Unlock()
+	if c == nil {
+		return
+	}
+	var ev AegisEvent
+	if err := json.Unmarshal([]byte(payload), &ev); err != nil {
+		fmt.Fprintf(os.Stderr, "aegis: AegisEvent JSON decode error: %v (len=%d)\n", err, len(payload))
+		return
+	}
+	// Blocking send applies backpressure if the consumer is slow (Rust invokes this from the pipeline worker).
+	c.eventsChan <- ev
+}
 
 // InitEngine resets embedded engine state in Rust (call before LoadRules / StartPipeline).
 func InitEngine() error {
@@ -148,51 +225,11 @@ func (c cString) free() {
 	}
 }
 
-// RegisterEventCallback installs the Go handler and registers the CGO bridge with Rust.
-// The C layer passes a borrowed NUL-terminated pointer; do not free it in Go.
-//
-// Only one callback may be active; register again returns an error until UnregisterEventCallback.
-func RegisterEventCallback(cb func(StandardizedEvent)) error {
-	if cb == nil {
-		return errors.New("aegis: callback must be non-nil")
-	}
-	userCallbackMu.Lock()
-	defer userCallbackMu.Unlock()
-	if userCallback != nil {
-		return errors.New("aegis: callback already registered; call UnregisterEventCallback first")
-	}
-	userCallback = cb
-	C.aegis_register_json_callback_bridge()
-	return nil
-}
-
-// UnregisterEventCallback clears the Go handler and unregisters the Rust JSON callback.
-func UnregisterEventCallback() {
-	userCallbackMu.Lock()
-	defer userCallbackMu.Unlock()
-	userCallback = nil
-	C.unregister_event_callback()
-}
-
 //export aegis_go_json_event_callback
 func aegis_go_json_event_callback(cjson *C.char) { // cgo passes char* (mutable pointer)
 	if cjson == nil {
 		return
 	}
 	s := C.GoString(cjson)
-
-	userCallbackMu.RLock()
-	cb := userCallback
-	userCallbackMu.RUnlock()
-	if cb == nil {
-		return
-	}
-
-	var ev StandardizedEvent
-	if err := json.Unmarshal([]byte(s), &ev); err != nil {
-		// Silent unmarshal failures made “no alerts” look like a rule-engine bug; surface decode issues.
-		fmt.Fprintf(os.Stderr, "aegis: StandardizedEvent JSON decode error: %v (len=%d)\n", err, len(s))
-		return
-	}
-	cb(ev)
+	pushAegisEventJSON(s)
 }

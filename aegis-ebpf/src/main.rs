@@ -5,9 +5,9 @@ async fn main() -> anyhow::Result<()> {
     let config = aegis_ebpf::SensorConfig::default();
     let mut rx = aegis_ebpf::start_sensor(config).await?;
 
-    println!("Sensor started. Listening for memory events...");
+    log::info!("Sensor started. Listening for memory events...");
     while let Some(event) = rx.recv().await {
-        println!(
+        log::debug!(
             "[{}] tgid={} pid={} comm={} type={:?} addr=0x{:x} flags=0x{:x} ret={}",
             event.timestamp_ns,
             event.tgid,

@@ -57,7 +57,7 @@ The **`clients/go/examples`** program prints lines like:
 SUPPRESSED_ALERT matched=[SIM_A_RWX] suppressed_by=[SUPP_JIT_...] ...
 ```
 
-That prefix is **application logic**: it classifies each **JSON `StandardizedEvent`** from the callback (`matched_rules` + `suppressed_by`). It is **not** gated by `AEGIS_LOG_LEVEL`. So you can see **`SUPPRESSED_ALERT`** on stdout even when Rust stderr `[Aegis][SUPPRESSED]` is silenced.
+That prefix is **application logic**: it classifies each **JSON event** from [aegis.Client.Events] (`matched_rules` + `suppressed_by`). It is **not** gated by `AEGIS_LOG_LEVEL`. So you can see **`SUPPRESSED_ALERT`** on stdout even when Rust stderr `[Aegis][SUPPRESSED]` is silenced.
 
 Summary:
 

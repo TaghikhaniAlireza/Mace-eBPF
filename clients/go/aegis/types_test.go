@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestStandardizedEvent_JSONRoundTrip_suppressed_by(t *testing.T) {
+func TestAegisEvent_JSONRoundTrip_suppressed_by(t *testing.T) {
 	const payload = `{
 	  "timestamp": 1,
 	  "pid": 2,
@@ -19,7 +19,7 @@ func TestStandardizedEvent_JSONRoundTrip_suppressed_by(t *testing.T) {
 	  "suppressed_by": ["SUPP_X"]
 	}`
 
-	var ev StandardizedEvent
+	var ev AegisEvent
 	if err := json.Unmarshal([]byte(payload), &ev); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestStandardizedEvent_JSONRoundTrip_suppressed_by(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	var again StandardizedEvent
+	var again AegisEvent
 	if err := json.Unmarshal(out, &again); err != nil {
 		t.Fatalf("round-trip unmarshal: %v", err)
 	}
@@ -43,8 +43,8 @@ func TestStandardizedEvent_JSONRoundTrip_suppressed_by(t *testing.T) {
 	}
 }
 
-func TestStandardizedEvent_omitempty_suppressed_by(t *testing.T) {
-	ev := StandardizedEvent{
+func TestAegisEvent_omitempty_suppressed_by(t *testing.T) {
+	ev := AegisEvent{
 		Timestamp:    1,
 		PID:          1,
 		UID:          0,

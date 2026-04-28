@@ -1,4 +1,4 @@
-// Example security monitor: register JSON callback, load YAML rules, start embedded engine.
+// Example security monitor: [aegis.NewClient] + [aegis.Client.Events] channel, load YAML rules, start embedded engine.
 //
 // From `clients/go/examples`, after `cargo build -p aegis-ebpf` (links target/debug/libaegis_ebpf.a):
 //
@@ -115,25 +115,30 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := aegis.RegisterEventCallback(func(ev aegis.StandardizedEvent) {
-		// Only rows with matched_rules are security alerts unless YAML suppressions cleared the alert path.
-		// Observations with matched_rules=[] are normal syscall telemetry (not an "ALERT").
-		label := "EVENT"
-		switch {
-		case len(ev.MatchedRules) > 0 && len(ev.SuppressedBy) == 0:
-			label = "ALERT"
-		case len(ev.MatchedRules) > 0 && len(ev.SuppressedBy) > 0:
-			label = "SUPPRESSED_ALERT"
-		case len(ev.SuppressedBy) > 0:
-			label = "SUPPRESSED"
-		}
-		fmt.Printf("%s matched=%v suppressed_by=%v syscall=%s pid=%d uid=%d user=%q comm=%q cmdline=%q args=%v ts=%d\n",
-			label, ev.MatchedRules, ev.SuppressedBy, ev.SyscallName, ev.PID, ev.UID, ev.Username, ev.ProcessName, ev.Cmdline, ev.Arguments, ev.Timestamp)
-	}); err != nil {
+	client, err := aegis.NewClient(256)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	defer aegis.UnregisterEventCallback()
+	defer func() { _ = client.Close() }()
+
+	go func() {
+		for ev := range client.Events() {
+			// Only rows with matched_rules are security alerts unless YAML suppressions cleared the alert path.
+			// Observations with matched_rules=[] are normal syscall telemetry (not an "ALERT").
+			label := "EVENT"
+			switch {
+			case len(ev.MatchedRules) > 0 && len(ev.SuppressedBy) == 0:
+				label = "ALERT"
+			case len(ev.MatchedRules) > 0 && len(ev.SuppressedBy) > 0:
+				label = "SUPPRESSED_ALERT"
+			case len(ev.SuppressedBy) > 0:
+				label = "SUPPRESSED"
+			}
+			fmt.Printf("%s matched=%v suppressed_by=%v syscall=%s pid=%d uid=%d user=%q comm=%q cmdline=%q args=%v ts=%d\n",
+				label, ev.MatchedRules, ev.SuppressedBy, ev.SyscallName, ev.PID, ev.UID, ev.Username, ev.ProcessName, ev.Cmdline, ev.Arguments, ev.Timestamp)
+		}
+	}()
 
 	if err := aegis.InitEngine(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -159,7 +164,7 @@ func main() {
 	}
 
 	fmt.Println("Aegis monitor running. Rules:", rulesLabel)
-	fmt.Println("Stdout labels (ALERT / EVENT / SUPPRESSED_*): from JSON callback — not filtered by AEGIS_LOG_LEVEL.")
+	fmt.Println("Stdout labels (ALERT / EVENT / SUPPRESSED_*): from Client.Events() — not filtered by AEGIS_LOG_LEVEL.")
 	fmt.Println("Stderr [Aegis][LEVEL] lines: filtered by AEGIS_LOG_LEVEL — see docs/aegis_log_level.md")
 	fmt.Println("Try: whoami  |  python3 tests/simulations/attack_simulator.py  (from repo root)")
 	fmt.Println("Ctrl+C to exit.")
