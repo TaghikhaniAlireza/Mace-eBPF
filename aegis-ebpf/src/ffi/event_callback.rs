@@ -76,6 +76,8 @@ mod tests {
         },
     };
 
+    use serial_test::serial;
+
     use super::*;
 
     static SEEN: AtomicUsize = AtomicUsize::new(0);
@@ -95,6 +97,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(event_callback_global)]
     fn register_invokes_json() {
         SEEN.store(0, Ordering::SeqCst);
         *LAST.lock().unwrap() = None;
@@ -115,6 +118,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(event_callback_global)]
     fn stress_json_callback_roundtrip() {
         SEEN.store(0, Ordering::SeqCst);
         unsafe {
