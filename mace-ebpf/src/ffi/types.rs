@@ -216,6 +216,7 @@ mod tests {
             ret: 0,
             execve_cmdline: String::new(),
             openat_path: String::new(),
+            memfd_name: String::new(),
         }
     }
 

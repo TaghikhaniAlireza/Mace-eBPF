@@ -173,6 +173,9 @@ pub struct MemoryEvent {
     pub execve_cmdline: alloc::string::String,
     /// Path captured in-kernel at `sys_enter_openat` (empty when not `openat`).
     pub openat_path: alloc::string::String,
+    /// `memfd_create` name snapshot from eBPF scratch (same payload layout as execve argv[0] slot).
+    #[serde(default)]
+    pub memfd_name: alloc::string::String,
 }
 
 #[cfg(feature = "user")]
@@ -235,6 +238,15 @@ impl MemoryEvent {
             alloc::string::String::new()
         };
 
+        let memfd_name = if event_type == EventType::MemfdCreate {
+            payload_blob
+                .as_ref()
+                .map(|b| decode_execve_cmdline_blob(&b[..EXECVE_SCRATCH_LEN]))
+                .unwrap_or_default()
+        } else {
+            alloc::string::String::new()
+        };
+
         Some(Self {
             timestamp_ns: raw.timestamp_ns,
             tgid: raw.tgid,
@@ -248,6 +260,7 @@ impl MemoryEvent {
             ret,
             execve_cmdline,
             openat_path,
+            memfd_name,
         })
     }
 }

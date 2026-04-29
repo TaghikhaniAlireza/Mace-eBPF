@@ -139,6 +139,10 @@ pub fn convert_alert_to_proto(alert: RustAlert) -> ProtoAlert {
         matched_flags,
         namespace,
         pod_name,
+        tags,
+        mitre_tactics,
+        mitre_techniques,
+        references,
     } = alert;
 
     let severity = match severity {
@@ -155,7 +159,11 @@ pub fn convert_alert_to_proto(alert: RustAlert) -> ProtoAlert {
         "syscall_id": syscall_id,
         "matched_flags": matched_flags,
         "namespace": namespace,
-        "pod_name": pod_name
+        "pod_name": pod_name,
+        "tags": tags,
+        "mitre_tactics": mitre_tactics,
+        "mitre_techniques": mitre_techniques,
+        "references": references,
     })
     .to_string();
 
@@ -372,6 +380,10 @@ mod tests {
             matched_flags: 0x4,
             namespace: Some("default".to_string()),
             pod_name: Some("test-pod".to_string()),
+            tags: Vec::new(),
+            mitre_tactics: Vec::new(),
+            mitre_techniques: Vec::new(),
+            references: Vec::new(),
         }
     }
 

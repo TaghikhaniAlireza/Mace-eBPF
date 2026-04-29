@@ -12,7 +12,12 @@ use super::{
 use crate::{pipeline::EnrichedEvent, state::ProcessState};
 
 /// Result of profiled rule evaluation: enforce matches, shadow matches, suppression ids, per-rule eval ns.
-pub type ProfiledEvaluation<'a> = (Vec<&'a Rule>, Vec<&'a Rule>, Vec<String>, Vec<(String, u64)>);
+pub type ProfiledEvaluation<'a> = (
+    Vec<&'a Rule>,
+    Vec<&'a Rule>,
+    Vec<String>,
+    Vec<(String, u64)>,
+);
 
 #[derive(Clone, Debug, Default)]
 pub struct RuleSet {

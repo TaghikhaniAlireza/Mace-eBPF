@@ -9,6 +9,32 @@ use crate::{
     rules::{Rule, Severity},
 };
 
+/// Per-rule threat-intel fields included in JSON and alert callbacks when a rule matches.
+#[derive(Serialize, Debug, Clone, Eq, PartialEq, Default)]
+pub struct RuleMatchMetadata {
+    pub rule_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mitre_tactics: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mitre_techniques: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<String>,
+}
+
+impl RuleMatchMetadata {
+    pub fn from_rule(rule: &Rule) -> Self {
+        Self {
+            rule_id: rule.id.clone(),
+            tags: rule.tags.clone(),
+            mitre_tactics: rule.mitre_tactics.clone(),
+            mitre_techniques: rule.mitre_techniques.clone(),
+            references: rule.references.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Alert {
     pub rule_id: String,
@@ -22,6 +48,10 @@ pub struct Alert {
     pub matched_flags: u64,
     pub namespace: Option<String>,
     pub pod_name: Option<String>,
+    pub tags: Vec<String>,
+    pub mitre_tactics: Vec<String>,
+    pub mitre_techniques: Vec<String>,
+    pub references: Vec<String>,
 }
 
 pub type AlertCallback = Arc<dyn Fn(Alert) -> BoxFuture<'static, ()> + Send + Sync>;
@@ -52,6 +82,12 @@ pub struct StandardizedEvent {
     /// True if at least one rule matched in Shadow mode (dry-run).
     #[serde(default, skip_serializing_if = "is_false")]
     pub shadow: bool,
+    /// Threat-intel metadata for rules in `matched_rules` (enforce path).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub matched_rule_metadata: Vec<RuleMatchMetadata>,
+    /// Threat-intel metadata for rules in `shadow_matched_rules`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shadow_rule_metadata: Vec<RuleMatchMetadata>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -136,6 +172,8 @@ pub fn build_standardized_event(
         suppressed_by: suppressed_by.to_vec(),
         shadow_matched_rules: Vec::new(),
         shadow: false,
+        matched_rule_metadata: Vec::new(),
+        shadow_rule_metadata: Vec::new(),
     }
 }
 
@@ -149,6 +187,8 @@ pub fn build_standardized_event_with_shadow(
     let mut ev = build_standardized_event(ev, matched_rule_ids, suppressed_by);
     ev.shadow_matched_rules = shadow_matched_rules.to_vec();
     ev.shadow = !shadow_matched_rules.is_empty();
+    ev.matched_rule_metadata = Vec::new();
+    ev.shadow_rule_metadata = Vec::new();
     ev
 }
 
@@ -169,6 +209,14 @@ pub fn build_standardized_event_from_rules(
     out.matched_rules = enforce_ids;
     out.shadow_matched_rules = shadow_ids;
     out.shadow = !out.shadow_matched_rules.is_empty();
+    out.matched_rule_metadata = matched_enforce
+        .iter()
+        .map(|r| RuleMatchMetadata::from_rule(r))
+        .collect();
+    out.shadow_rule_metadata = matched_shadow
+        .iter()
+        .map(|r| RuleMatchMetadata::from_rule(r))
+        .collect();
     out
 }
 
@@ -188,6 +236,10 @@ impl Alert {
             matched_flags: event.inner.flags,
             namespace: event.metadata.as_ref().map(|meta| meta.namespace.clone()),
             pod_name: event.metadata.as_ref().map(|meta| meta.pod_name.clone()),
+            tags: rule.tags.clone(),
+            mitre_tactics: rule.mitre_tactics.clone(),
+            mitre_techniques: rule.mitre_techniques.clone(),
+            references: rule.references.clone(),
         }
     }
 }
@@ -234,6 +286,7 @@ mod tests {
             ret: 0,
             execve_cmdline: String::new(),
             openat_path: String::new(),
+            memfd_name: String::new(),
         }
     }
 

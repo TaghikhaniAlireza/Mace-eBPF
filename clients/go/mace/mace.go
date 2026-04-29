@@ -33,6 +33,14 @@ import (
 // MaceEvent is the JSON shape emitted by the Rust pipeline after rule evaluation
 // (serde_json of `mace_ebpf::StandardizedEvent`). All syscall observations are delivered here;
 // use MatchedRules / SuppressedBy to classify alerts vs telemetry.
+type RuleMatchMetadata struct {
+	RuleID             string   `json:"rule_id"`
+	Tags               []string `json:"tags,omitempty"`
+	MitreTactics       []string `json:"mitre_tactics,omitempty"`
+	MitreTechniques    []string `json:"mitre_techniques,omitempty"`
+	References         []string `json:"references,omitempty"`
+}
+
 type MaceEvent struct {
 	Timestamp    uint64   `json:"timestamp"`
 	PID          uint32   `json:"pid"`
@@ -47,7 +55,11 @@ type MaceEvent struct {
 	SuppressedBy []string `json:"suppressed_by,omitempty"`
 	// ShadowMatchedRules lists rule ids that matched in Shadow (dry-run) mode (Phase 3).
 	ShadowMatchedRules []string `json:"shadow_matched_rules,omitempty"`
-	Shadow bool `json:"shadow,omitempty"`
+	Shadow             bool     `json:"shadow,omitempty"`
+	// MatchedRuleMetadata is threat-intel metadata for each enforce-mode rule in MatchedRules.
+	MatchedRuleMetadata []RuleMatchMetadata `json:"matched_rule_metadata,omitempty"`
+	// ShadowRuleMetadata is threat-intel metadata for each shadow-mode rule in ShadowMatchedRules.
+	ShadowRuleMetadata []RuleMatchMetadata `json:"shadow_rule_metadata,omitempty"`
 }
 
 // Client receives structured JSON events from the Rust core on a buffered channel (single active client per process).

@@ -638,6 +638,7 @@ mod tests {
             ret: 0,
             execve_cmdline: String::new(),
             openat_path: String::new(),
+            memfd_name: String::new(),
         }
     }
 
@@ -661,6 +662,7 @@ mod tests {
             ret: 0,
             execve_cmdline: String::new(),
             openat_path: String::new(),
+            memfd_name: String::new(),
         }
     }
 
@@ -1092,6 +1094,12 @@ mod tests {
                 process_name_regex: None,
                 pathname_regex: None,
                 cmdline_context_regex: None,
+                target_process_regex: None,
+                memfd_name_regex: None,
+                tags: vec![],
+                mitre_tactics: vec![],
+                mitre_techniques: vec![],
+                references: vec![],
                 sequence: None,
             }],
             suppressions: vec![],

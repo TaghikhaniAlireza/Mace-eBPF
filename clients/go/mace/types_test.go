@@ -69,6 +69,49 @@ func TestMaceEvent_shadow_fields(t *testing.T) {
 	}
 }
 
+func TestMaceEvent_rule_match_metadata(t *testing.T) {
+	const payload = `{
+	  "timestamp": 1,
+	  "pid": 2,
+	  "uid": 0,
+	  "username": "",
+	  "process_name": "p",
+	  "syscall_name": "execve",
+	  "cmdline": "",
+	  "arguments": [],
+	  "matched_rules": ["R1"],
+	  "matched_rule_metadata": [
+	    {
+	      "rule_id": "R1",
+	      "tags": ["injection"],
+	      "mitre_techniques": ["T1574.006"],
+	      "references": ["https://example.com"]
+	    }
+	  ],
+	  "shadow_matched_rules": ["S1"],
+	  "shadow_rule_metadata": [
+	    {
+	      "rule_id": "S1",
+	      "mitre_tactics": ["Defense Evasion"]
+	    }
+	  ],
+	  "shadow": true
+	}`
+	var ev MaceEvent
+	if err := json.Unmarshal([]byte(payload), &ev); err != nil {
+		t.Fatal(err)
+	}
+	if len(ev.MatchedRuleMetadata) != 1 || ev.MatchedRuleMetadata[0].RuleID != "R1" {
+		t.Fatalf("matched_rule_metadata: %+v", ev.MatchedRuleMetadata)
+	}
+	if len(ev.MatchedRuleMetadata[0].MitreTechniques) != 1 || ev.MatchedRuleMetadata[0].MitreTechniques[0] != "T1574.006" {
+		t.Fatalf("mitre_techniques: %+v", ev.MatchedRuleMetadata[0].MitreTechniques)
+	}
+	if len(ev.ShadowRuleMetadata) != 1 || ev.ShadowRuleMetadata[0].RuleID != "S1" {
+		t.Fatalf("shadow_rule_metadata: %+v", ev.ShadowRuleMetadata)
+	}
+}
+
 func TestMaceEvent_omitempty_suppressed_by(t *testing.T) {
 	ev := MaceEvent{
 		Timestamp:    1,

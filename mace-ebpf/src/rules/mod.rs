@@ -43,6 +43,10 @@ pub struct SuppressionEntry {
     pub pathname_regex: Option<Regex>,
     #[serde(skip)]
     pub cmdline_context_regex: Option<Regex>,
+    #[serde(skip)]
+    pub target_process_regex: Option<Regex>,
+    #[serde(skip)]
+    pub memfd_name_regex: Option<Regex>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
@@ -77,9 +81,23 @@ pub struct Rule {
     /// Regex against inherited / current exec command line (execve snapshot or `cmdline_context` on later syscalls).
     #[serde(skip)]
     pub cmdline_context_regex: Option<Regex>,
+    /// Compiled from `conditions.target_process_pattern` (ptrace target `comm`).
+    #[serde(skip)]
+    pub target_process_regex: Option<Regex>,
+    /// Compiled from `conditions.memfd_name_pattern`.
+    #[serde(skip)]
+    pub memfd_name_regex: Option<Regex>,
     /// Ordered per-TGID state machine (optional).
     #[serde(default)]
     pub sequence: Option<SequenceRule>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub mitre_tactics: Vec<String>,
+    #[serde(default)]
+    pub mitre_techniques: Vec<String>,
+    #[serde(default)]
+    pub references: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -133,6 +151,15 @@ pub struct Conditions {
     /// If true, require `event.inner.ret < 0` (syscall failure). Combine with `frequency_window` for brute-force style rules.
     #[serde(default)]
     pub syscall_failures_only: bool,
+    /// Regex against **target** process `comm` for `ptrace` (`event.inner.len` holds target pid).
+    #[serde(default)]
+    pub target_process_pattern: Option<String>,
+    /// Each substring must appear in `/proc/<pid>/environ` (NULs → newlines) for `execve` events.
+    #[serde(default)]
+    pub env_contains: Vec<String>,
+    /// Regex against `memfd_create` name snapshot (`MemoryEvent.memfd_name`).
+    #[serde(default)]
+    pub memfd_name_pattern: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -200,6 +227,8 @@ impl Rule {
             self.cgroup_regex.as_ref(),
             self.pathname_regex.as_ref(),
             self.cmdline_context_regex.as_ref(),
+            self.target_process_regex.as_ref(),
+            self.memfd_name_regex.as_ref(),
             event,
             state,
             self.stateful.as_ref(),
@@ -256,6 +285,8 @@ pub(crate) fn evaluate_rule_conditions(
     cgroup_regex: Option<&Regex>,
     pathname_regex: Option<&Regex>,
     cmdline_context_regex: Option<&Regex>,
+    target_process_regex: Option<&Regex>,
+    memfd_name_regex: Option<&Regex>,
     event: &EnrichedEvent,
     state: Option<&ProcessState>,
     stateful: Option<&StatefulConditions>,
@@ -402,6 +433,46 @@ pub(crate) fn evaluate_rule_conditions(
         }
     }
 
+    if let Some(rx) = target_process_regex {
+        if event.inner.event_type != EventType::Ptrace {
+            return false;
+        }
+        let Ok(tid) = u32::try_from(event.inner.len) else {
+            return false;
+        };
+        let Some(comm) = read_proc_comm_flat(tid) else {
+            return false;
+        };
+        if !rx.is_match(&comm) {
+            return false;
+        }
+    }
+
+    if let Some(rx) = memfd_name_regex {
+        if event.inner.event_type != EventType::MemfdCreate {
+            return false;
+        }
+        if !rx.is_match(&event.inner.memfd_name) {
+            return false;
+        }
+    }
+
+    if !conditions.env_contains.is_empty() {
+        if event.inner.event_type != EventType::Execve {
+            return false;
+        }
+        let Some(env) = read_proc_environ_flat(event.inner.pid) else {
+            return false;
+        };
+        if !conditions
+            .env_contains
+            .iter()
+            .all(|needle| env.contains(needle.as_str()))
+        {
+            return false;
+        }
+    }
+
     if let Some(stateful) = stateful {
         let Some(state) = state else {
             return false;
@@ -434,6 +505,8 @@ impl SuppressionEntry {
             self.cgroup_regex.as_ref(),
             self.pathname_regex.as_ref(),
             self.cmdline_context_regex.as_ref(),
+            self.target_process_regex.as_ref(),
+            self.memfd_name_regex.as_ref(),
             event,
             None,
             None,
@@ -563,6 +636,45 @@ pub(crate) fn validate_conditions_structured(conditions: &Conditions) -> Result<
         ));
     }
 
+    if conditions.target_process_pattern.is_some() {
+        let ok = conditions
+            .syscall
+            .as_deref()
+            .map(|s| s.eq_ignore_ascii_case("ptrace"))
+            .unwrap_or(false);
+        if !ok {
+            return Err(RuleError::InvalidCondition(
+                "target_process_pattern requires syscall: ptrace".into(),
+            ));
+        }
+    }
+
+    if conditions.memfd_name_pattern.is_some() {
+        let ok = conditions
+            .syscall
+            .as_deref()
+            .map(|s| s.eq_ignore_ascii_case("memfd_create"))
+            .unwrap_or(false);
+        if !ok {
+            return Err(RuleError::InvalidCondition(
+                "memfd_name_pattern requires syscall: memfd_create".into(),
+            ));
+        }
+    }
+
+    if !conditions.env_contains.is_empty() {
+        let ok = conditions
+            .syscall
+            .as_deref()
+            .map(|s| s.eq_ignore_ascii_case("execve"))
+            .unwrap_or(false);
+        if !ok {
+            return Err(RuleError::InvalidCondition(
+                "env_contains requires syscall: execve".into(),
+            ));
+        }
+    }
+
     for flag in &conditions.flags_contains {
         validate_flag_name(flag)?;
     }
@@ -592,6 +704,20 @@ pub(crate) fn validate_conditions_structured(conditions: &Conditions) -> Result<
         Regex::new(pattern).map_err(|err| {
             RuleError::InvalidCondition(format!(
                 "invalid cmdline_context_pattern regex '{pattern}': {err}"
+            ))
+        })?;
+    }
+    if let Some(pattern) = conditions.target_process_pattern.as_deref() {
+        Regex::new(pattern).map_err(|err| {
+            RuleError::InvalidCondition(format!(
+                "invalid target_process_pattern regex '{pattern}': {err}"
+            ))
+        })?;
+    }
+    if let Some(pattern) = conditions.memfd_name_pattern.as_deref() {
+        Regex::new(pattern).map_err(|err| {
+            RuleError::InvalidCondition(format!(
+                "invalid memfd_name_pattern regex '{pattern}': {err}"
             ))
         })?;
     }
@@ -644,6 +770,18 @@ pub(crate) fn compile_rule_regexes(rule: &mut Rule) -> Result<(), RuleError> {
         })?),
         None => None,
     };
+    rule.target_process_regex = match rule.conditions.target_process_pattern.as_deref() {
+        Some(p) => Some(Regex::new(p).map_err(|e| {
+            RuleError::InvalidCondition(format!("target_process_pattern compile error: {e}"))
+        })?),
+        None => None,
+    };
+    rule.memfd_name_regex = match rule.conditions.memfd_name_pattern.as_deref() {
+        Some(p) => Some(Regex::new(p).map_err(|e| {
+            RuleError::InvalidCondition(format!("memfd_name_pattern compile error: {e}"))
+        })?),
+        None => None,
+    };
     Ok(())
 }
 
@@ -669,6 +807,18 @@ pub(crate) fn compile_suppression_regexes(entry: &mut SuppressionEntry) -> Resul
     entry.cmdline_context_regex = match entry.conditions.cmdline_context_pattern.as_deref() {
         Some(p) => Some(Regex::new(p).map_err(|e| {
             RuleError::InvalidCondition(format!("cmdline_context_pattern compile error: {e}"))
+        })?),
+        None => None,
+    };
+    entry.target_process_regex = match entry.conditions.target_process_pattern.as_deref() {
+        Some(p) => Some(Regex::new(p).map_err(|e| {
+            RuleError::InvalidCondition(format!("target_process_pattern compile error: {e}"))
+        })?),
+        None => None,
+    };
+    entry.memfd_name_regex = match entry.conditions.memfd_name_pattern.as_deref() {
+        Some(p) => Some(Regex::new(p).map_err(|e| {
+            RuleError::InvalidCondition(format!("memfd_name_pattern compile error: {e}"))
         })?),
         None => None,
     };
@@ -745,6 +895,25 @@ fn read_proc_cmdline_flat(pid: u32) -> Option<String> {
     )
 }
 
+/// Task `comm` from `/proc/<pid>/comm` (16-byte kernel `comm`, newline-terminated in procfs).
+fn read_proc_comm_flat(pid: u32) -> Option<String> {
+    let path = format!("/proc/{pid}/comm");
+    let raw = fs::read(&path).ok()?;
+    let s = String::from_utf8_lossy(&raw).trim().to_string();
+    if s.is_empty() { None } else { Some(s) }
+}
+
+/// `/proc/<pid>/environ` as a single string with NUL bytes replaced by newlines (substring search).
+fn read_proc_environ_flat(pid: u32) -> Option<String> {
+    let path = format!("/proc/{pid}/environ");
+    let raw = fs::read(&path).ok()?;
+    if raw.is_empty() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&raw).into_owned();
+    Some(s.replace('\0', "\n"))
+}
+
 /// Build a normalized absolute-style path for `pathname_pattern` matching.
 /// Uses in-kernel `openat_path` snapshot (no `process_vm_readv`); for relative paths, joins with
 /// `/proc/<tgid>/fd/<dirfd>` when possible.
@@ -798,8 +967,10 @@ fn flag_bit(name: &str) -> Option<u64> {
 mod tests {
     use std::{
         fs,
+        process::Command,
         sync::Arc,
-        time::{SystemTime, UNIX_EPOCH},
+        thread,
+        time::{Duration, SystemTime, UNIX_EPOCH},
     };
 
     use mace_ebpf_common::{EventType, MemoryEvent};
@@ -824,6 +995,7 @@ mod tests {
                 ret: 0,
                 execve_cmdline: String::new(),
                 openat_path: String::new(),
+                memfd_name: String::new(),
             },
             metadata: None,
             cmdline_context: None,
@@ -868,6 +1040,12 @@ rules:
             process_name_regex: None,
             pathname_regex: None,
             cmdline_context_regex: None,
+            target_process_regex: None,
+            memfd_name_regex: None,
+            tags: vec![],
+            mitre_tactics: vec![],
+            mitre_techniques: vec![],
+            references: vec![],
             sequence: None,
         };
         let mut ev = fake_enriched_event(EventType::Mmap, 0, 4096);
@@ -896,6 +1074,12 @@ rules:
             process_name_regex: None,
             pathname_regex: None,
             cmdline_context_regex: None,
+            target_process_regex: None,
+            memfd_name_regex: None,
+            tags: vec![],
+            mitre_tactics: vec![],
+            mitre_techniques: vec![],
+            references: vec![],
             sequence: None,
         };
         let mut ev = fake_enriched_event(EventType::Execve, 0, 0);
@@ -928,6 +1112,12 @@ rules:
             process_name_regex: None,
             pathname_regex: None,
             cmdline_context_regex: None,
+            target_process_regex: None,
+            memfd_name_regex: None,
+            tags: vec![],
+            mitre_tactics: vec![],
+            mitre_techniques: vec![],
+            references: vec![],
             sequence: None,
         };
         let mprotect_event = fake_enriched_event(EventType::MprotectWX, 0, 4096);
@@ -953,6 +1143,12 @@ rules:
             process_name_regex: None,
             pathname_regex: None,
             cmdline_context_regex: None,
+            target_process_regex: None,
+            memfd_name_regex: None,
+            tags: vec![],
+            mitre_tactics: vec![],
+            mitre_techniques: vec![],
+            references: vec![],
             sequence: None,
         };
 
@@ -983,6 +1179,12 @@ rules:
             process_name_regex: None,
             pathname_regex: None,
             cmdline_context_regex: None,
+            target_process_regex: None,
+            memfd_name_regex: None,
+            tags: vec![],
+            mitre_tactics: vec![],
+            mitre_techniques: vec![],
+            references: vec![],
             sequence: None,
         };
 
@@ -1011,6 +1213,12 @@ rules:
                     process_name_regex: None,
                     pathname_regex: None,
                     cmdline_context_regex: None,
+                    target_process_regex: None,
+                    memfd_name_regex: None,
+                    tags: vec![],
+                    mitre_tactics: vec![],
+                    mitre_techniques: vec![],
+                    references: vec![],
                     sequence: None,
                 },
                 Rule {
@@ -1028,6 +1236,12 @@ rules:
                     process_name_regex: None,
                     pathname_regex: None,
                     cmdline_context_regex: None,
+                    target_process_regex: None,
+                    memfd_name_regex: None,
+                    tags: vec![],
+                    mitre_tactics: vec![],
+                    mitre_techniques: vec![],
+                    references: vec![],
                     sequence: None,
                 },
                 Rule {
@@ -1045,6 +1259,12 @@ rules:
                     process_name_regex: None,
                     pathname_regex: None,
                     cmdline_context_regex: None,
+                    target_process_regex: None,
+                    memfd_name_regex: None,
+                    tags: vec![],
+                    mitre_tactics: vec![],
+                    mitre_techniques: vec![],
+                    references: vec![],
                     sequence: None,
                 },
             ],
@@ -1275,6 +1495,7 @@ rules:
                 ret: 0,
                 execve_cmdline: String::new(),
                 openat_path: String::new(),
+                memfd_name: String::new(),
             })
             .await
             .expect("send should succeed");
@@ -1326,6 +1547,7 @@ rules:
                 ret: 0,
                 execve_cmdline: String::new(),
                 openat_path: String::new(),
+                memfd_name: String::new(),
             },
             metadata: None,
             cmdline_context: None,
@@ -1344,6 +1566,116 @@ rules:
         assert!(
             json.contains(r#""matched_rules":["TEST_001"]"#),
             "unexpected json: {json}"
+        );
+    }
+
+    #[test]
+    fn mitre_and_env_contains_parse_and_propagate_to_alert() {
+        let yaml = r#"
+rules:
+  - id: "RULE-ENV-1"
+    name: "ld preload execve"
+    severity: "high"
+    description: "test"
+    mitre_techniques: ["T1574.006"]
+    tags: ["persistence"]
+    references: ["https://attack.mitre.org/techniques/T1574/006/"]
+    conditions:
+      syscall: "execve"
+      env_contains: ["LD_PRELOAD"]
+"#;
+        let set = RuleSet::from_yaml_str(yaml).expect("yaml");
+        let rule = &set.rules[0];
+        assert_eq!(rule.mitre_techniques, vec!["T1574.006"]);
+        assert_eq!(rule.tags, vec!["persistence"]);
+
+        // Real `/proc/<pid>/environ` for a live task with LD_PRELOAD set.
+        let child = Command::new("sleep")
+            .arg("60")
+            // Empty value still yields `LD_PRELOAD=` in the task environ (substring match) without
+            // ld.so trying to load a missing shared object.
+            .env("LD_PRELOAD", "")
+            .spawn()
+            .expect("spawn sleep child");
+        let child_pid = child.id();
+
+        let environ_path = format!("/proc/{child_pid}/environ");
+        for _ in 0..50 {
+            if fs::metadata(&environ_path).is_ok() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        struct KillChild(std::process::Child);
+        impl Drop for KillChild {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let _guard = KillChild(child);
+
+        let ev = crate::EnrichedEvent {
+            inner: MemoryEvent {
+                timestamp_ns: 1,
+                tgid: child_pid,
+                pid: child_pid,
+                uid: 0,
+                comm: *b"sleep\0\0\0\0\0\0\0\0\0\0\0",
+                event_type: EventType::Execve,
+                addr: 0,
+                len: 0,
+                flags: 0,
+                ret: 0,
+                execve_cmdline: "/bin/sleep 60".into(),
+                openat_path: String::new(),
+                memfd_name: String::new(),
+            },
+            metadata: None,
+            cmdline_context: None,
+            username: None,
+        };
+
+        let matched = set.evaluate(&ev, None);
+        assert_eq!(matched.len(), 1, "rule should match via /proc environ");
+
+        let alert = crate::alert::Alert::from_rule_and_event(matched[0], &ev);
+        assert_eq!(alert.mitre_techniques, vec!["T1574.006"]);
+        assert_eq!(alert.tags, vec!["persistence"]);
+        assert_eq!(
+            alert.references,
+            vec!["https://attack.mitre.org/techniques/T1574/006/"]
+        );
+
+        let std_ev = crate::alert::build_standardized_event_from_rules(&ev, &matched, &[], None);
+        assert_eq!(std_ev.matched_rule_metadata.len(), 1);
+        assert_eq!(
+            std_ev.matched_rule_metadata[0].mitre_techniques,
+            vec!["T1574.006"]
+        );
+        let json = serde_json::to_string(&std_ev).expect("json");
+        assert!(json.contains("matched_rule_metadata"));
+        assert!(json.contains("T1574.006"));
+    }
+
+    #[test]
+    fn validate_rejects_env_contains_without_execve_syscall() {
+        let yaml = r#"
+rules:
+  - id: "BAD"
+    name: "x"
+    severity: "low"
+    description: "x"
+    conditions:
+      syscall: "mmap"
+      env_contains: ["LD_PRELOAD"]
+"#;
+        let err = RuleSet::from_yaml_str(yaml).expect_err("should reject");
+        assert!(
+            err.to_string()
+                .contains("env_contains requires syscall: execve"),
+            "unexpected err: {err}"
         );
     }
 
