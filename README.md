@@ -1,15 +1,15 @@
-# Aegis-eBPF
+# Mace-eBPF
 
 **The missing piece in real-time detection of code injection, memory anomalies, and suspicious behavior across Linux, cloud-native deployments, and Kubernetes ecosystems, with multi-language support.**
 
-**Aegis-eBPF** is a high-performance, production-oriented **Linux eBPF** security and monitoring SDK. The core is written in **Rust** (userspace + [`aya`](https://github.com/aya-rs/aya) eBPF programs) with **CO-RE** (Compile Once — Run Everywhere) so a single BPF object can load across supported kernels. **Go** (`cgo`) links the Rust userspace core **statically** via `libaegis_ebpf.a` (no `LD_LIBRARY_PATH` for the Go path). **Python** (`ctypes`) loads the same FFI through the **`libaegis_ebpf.so`** `cdylib` plus `aegis.h`.
+**Mace-eBPF** is a high-performance, production-oriented **Linux eBPF** security and monitoring SDK. The core is written in **Rust** (userspace + [`aya`](https://github.com/aya-rs/aya) eBPF programs) with **CO-RE** (Compile Once — Run Everywhere) so a single BPF object can load across supported kernels. **Go** (`cgo`) links the Rust userspace core **statically** via `libmace_ebpf.a` (no `LD_LIBRARY_PATH` for the Go path). **Python** (`ctypes`) loads the same FFI through the **`libmace_ebpf.so`** `cdylib` plus `mace.h`.
 
 ---
 
 ## Badges
 
-[![CI](https://github.com/TaghikhaniAlireza/Aegis-eBPF/actions/workflows/ci.yml/badge.svg)](https://github.com/TaghikhaniAlireza/Aegis-eBPF/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/TaghikhaniAlireza/Aegis-eBPF?label=release&logo=github)](https://github.com/TaghikhaniAlireza/Aegis-eBPF/releases)
+[![CI](https://github.com/TaghikhaniAlireza/Mace-eBPF/actions/workflows/ci.yml/badge.svg)](https://github.com/TaghikhaniAlireza/Mace-eBPF/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/TaghikhaniAlireza/Mace-eBPF?label=release&logo=github)](https://github.com/TaghikhaniAlireza/Mace-eBPF/releases)
 [![License](https://img.shields.io/badge/license-MIT%20%7C%20Apache--2.0%20%7C%20GPL--2.0%20(eBPF)-blue.svg)](./LICENSE-MIT)
 
 ---
@@ -44,7 +44,7 @@ eBPF does not run on macOS; you can cross-compile the Linux binary and copy arti
 
 ## Docker (pre-built image)
 
-See **[docs/1-getting-started/quickstart.md](./docs/1-getting-started/quickstart.md)** for `docker run --privileged … ghcr.io/taghikhanialireza/aegis-ebpf:latest` (GHCR publishes on pushes to `main` and on `v*` tags).
+See **[docs/1-getting-started/quickstart.md](./docs/1-getting-started/quickstart.md)** for `docker run --privileged … ghcr.io/taghikhanialireza/mace-ebpf:latest` (GHCR publishes on pushes to `main` and on `v*` tags).
 
 Full documentation index: **[docs/README.md](./docs/README.md)**.
 
@@ -52,13 +52,13 @@ Full documentation index: **[docs/README.md](./docs/README.md)**.
 
 ### Pre-built FFI bundle (GitHub Releases)
 
-On each **`v*`** tag push, [`.github/workflows/release.yml`](./.github/workflows/release.yml) publishes **`aegis-ebpf-linux-amd64.tar.gz`** containing:
+On each **`v*`** tag push, [`.github/workflows/release.yml`](./.github/workflows/release.yml) publishes **`mace-ebpf-linux-amd64.tar.gz`** containing:
 
-- `libaegis_ebpf.so` — Rust `cdylib` (Python `ctypes` and any dynamic consumers)
-- `libaegis_ebpf.a` — Rust `staticlib` (recommended for **Go** `cgo`; see below)
-- `aegis.h` — C header for `cgo` / `ctypes`
+- `libmace_ebpf.so` — Rust `cdylib` (Python `ctypes` and any dynamic consumers)
+- `libmace_ebpf.a` — Rust `staticlib` (recommended for **Go** `cgo`; see below)
+- `mace.h` — C header for `cgo` / `ctypes`
 
-**Python:** add the extract directory to **`LD_LIBRARY_PATH`** (or install the `.so` into the loader search path). **Go:** point **`CGO_CFLAGS`** at the directory with **`aegis.h`** and **`CGO_LDFLAGS`** at **`libaegis_ebpf.a`** plus `-ldl -lpthread -lm -lgcc_s`, or use the in-repo packages which already embed those flags (debug vs release is selected with the **`aegis_static_release`** build tag — see **Usage** below).
+**Python:** add the extract directory to **`LD_LIBRARY_PATH`** (or install the `.so` into the loader search path). **Go:** point **`CGO_CFLAGS`** at the directory with **`mace.h`** and **`CGO_LDFLAGS`** at **`libmace_ebpf.a`** plus `-ldl -lpthread -lm -lgcc_s`, or use the in-repo packages which already embed those flags (debug vs release is selected with the **`mace_static_release`** build tag — see **Usage** below).
 
 ### Build from source
 
@@ -67,13 +67,13 @@ On each **`v*`** tag push, [`.github/workflows/release.yml`](./.github/workflows
 cargo build --release
 
 # Shared + static library output (Linux x86_64 default target)
-ls -la target/release/libaegis_ebpf.so target/release/libaegis_ebpf.a
+ls -la target/release/libmace_ebpf.so target/release/libmace_ebpf.a
 
 # Generated C header (from build script / cbindgen)
-ls -la aegis-ebpf/include/aegis.h
+ls -la mace-ebpf/include/mace.h
 ```
 
-Building **`aegis-ebpf`** triggers compilation of the **`aegis-ebpf-ebpf`** program for `bpfel-unknown-none` via `build.rs` (requires nightly + `bpf-linker` as above).
+Building **`mace-ebpf`** triggers compilation of the **`mace-ebpf-ebpf`** program for `bpfel-unknown-none` via `build.rs` (requires nightly + `bpf-linker` as above).
 
 ---
 
@@ -81,7 +81,7 @@ Building **`aegis-ebpf`** triggers compilation of the **`aegis-ebpf-ebpf`** prog
 
 ### Go (`cgo`)
 
-The Go module lives under **`aegis-ebpf/pkg/aegis`** (module path: `github.com/TaghikhaniAlireza/aegis-ebpf/sdk/pkg/aegis`). The package **`#cgo`** directives link **`libaegis_ebpf.a`** from **`target/debug`** by default. After **`cargo build --release -p aegis-ebpf`**, build or test Go with **`-tags aegis_static_release`** so the linker uses **`target/release/libaegis_ebpf.a`**. You do **not** set **`LD_LIBRARY_PATH`** for this Go path. To override paths in your own module, set **`CGO_CFLAGS=-I.../aegis-ebpf/include`** and **`CGO_LDFLAGS=.../libaegis_ebpf.a -ldl -lpthread -lm -lgcc_s`**.
+The Go module lives under **`mace-ebpf/pkg/mace`** (module path: `github.com/mace-ebpf/sdk/pkg/mace`). The package **`#cgo`** directives link **`libmace_ebpf.a`** from **`target/debug`** by default. After **`cargo build --release -p mace-ebpf`**, build or test Go with **`-tags mace_static_release`** so the linker uses **`target/release/libmace_ebpf.a`**. You do **not** set **`LD_LIBRARY_PATH`** for this Go path. To override paths in your own module, set **`CGO_CFLAGS=-I.../mace-ebpf/include`** and **`CGO_LDFLAGS=.../libmace_ebpf.a -ldl -lpthread -lm -lgcc_s`**.
 
 ```go
 package main
@@ -90,21 +90,21 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/aegis-ebpf/sdk/pkg/aegis"
+	"github.com/mace-ebpf/sdk/pkg/mace"
 )
 
 func main() {
-	a, err := aegis.NewArena(1024)
+	a, err := mace.NewArena(1024)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer a.Close()
 
-	ev := aegis.Event{
+	ev := mace.Event{
 		TimestampNs: 1,
 		TGID:        1000,
 		PID:         1001,
-		SyscallID:   aegis.SyscallMmap,
+		SyscallID:   mace.SyscallMmap,
 		Args:        [6]uint64{0x7fff_0000_0000, 4096, 0, 0, 0, 0},
 		CgroupID:    42,
 		Comm:        [16]byte{'m', 'y', 'a', 'p', 'p', 0},
@@ -124,20 +124,20 @@ func main() {
 Run tests against a locally built static library (from repo root):
 
 ```bash
-cargo build -p aegis-ebpf
-./aegis-ebpf/pkg/aegis/run_go_tests.sh
+cargo build -p mace-ebpf
+./mace-ebpf/pkg/mace/run_go_tests.sh
 # Or: make go-test
-# After `cargo build --release -p aegis-ebpf`: AEGIS_GO_STATIC_RELEASE=1 ./aegis-ebpf/pkg/aegis/run_go_tests.sh
+# After `cargo build --release -p mace-ebpf`: MACE_GO_STATIC_RELEASE=1 ./mace-ebpf/pkg/mace/run_go_tests.sh
 ```
 
-For a higher-level API with channels, see **`aegis.NewSensor`** and **`aegis.DefaultConfig()`** in [`aegis-ebpf/pkg/aegis/sensor.go`](./aegis-ebpf/pkg/aegis/sensor.go).
+For a higher-level API with channels, see **`mace.NewSensor`** and **`mace.DefaultConfig()`** in [`mace-ebpf/pkg/mace/sensor.go`](./mace-ebpf/pkg/mace/sensor.go).
 
 ### Python (`ctypes`)
 
-Install the package from **`aegis-ebpf/python`** (requires **`libaegis_ebpf.so`** on **`LD_LIBRARY_PATH`** and `aegis.h` reachable via the package’s expected layout, or run from a checkout with the `.so` next to / discoverable by the loader).
+Install the package from **`mace-ebpf/python`** (requires **`libmace_ebpf.so`** on **`LD_LIBRARY_PATH`** and `mace.h` reachable via the package’s expected layout, or run from a checkout with the `.so` next to / discoverable by the loader).
 
 ```python
-from aegis import Arena, raw_memory_event
+from mace import Arena, raw_memory_event
 
 with Arena(16) as arena:
     ev = raw_memory_event(
@@ -156,7 +156,7 @@ with Arena(16) as arena:
 
 ```bash
 export LD_LIBRARY_PATH=/path/to/dir-with-lib:$LD_LIBRARY_PATH
-cd aegis-ebpf/python && pip install -e . && pytest tests/ -v
+cd mace-ebpf/python && pip install -e . && pytest tests/ -v
 ```
 
 ---
@@ -165,15 +165,15 @@ cd aegis-ebpf/python && pip install -e . && pytest tests/ -v
 
 ```text
 .
-├── aegis-ebpf/              # Main Rust crate: userspace SDK, FFI (cdylib/staticlib), optional k8s / observability
+├── mace-ebpf/              # Main Rust crate: userspace SDK, FFI (cdylib/staticlib), optional k8s / observability
 │   ├── src/                 # lib.rs, pipeline, rules, ffi/, …
-│   ├── include/             # Generated aegis.h (C FFI)
-│   ├── pkg/aegis/           # Go module: cgo bindings, Sensor, Arena, protobuf
+│   ├── include/             # Generated mace.h (C FFI)
+│   ├── pkg/mace/           # Go module: cgo bindings, Sensor, Arena, protobuf
 │   └── python/              # Python package: ctypes wrappers + examples
-├── aegis-ebpf-ebpf/         # no_std eBPF programs (tracepoints, maps, ring buffer)
-├── aegis-ebpf-common/       # Shared types (user + kernel layouts)
-├── aegis-ebpf-loader/       # Minimal loader binary (daemon mode for VM/matrix tests)
-├── clients/go/              # Go SDK (aegis), aegis-agent, examples
+├── mace-ebpf-ebpf/         # no_std eBPF programs (tracepoints, maps, ring buffer)
+├── mace-ebpf-common/       # Shared types (user + kernel layouts)
+├── mace-ebpf-loader/       # Minimal loader binary (daemon mode for VM/matrix tests)
+├── clients/go/              # Go SDK (`mace`), mace-agent, examples
 ├── docs/                    # Structured technical documentation (see docs/README.md)
 ├── packaging/               # nfpm (.deb), systemd unit, default config/rules
 ├── .github/workflows/       # CI, release (tarball + .deb), Docker (GHCR)
@@ -189,17 +189,17 @@ cd aegis-ebpf/python && pip install -e . && pytest tests/ -v
 - **[docs/README.md](./docs/README.md)** — Documentation map (getting started, installation, concepts, configuration, developer guide, references).
 - **[AGENTS.md](./AGENTS.md)** — Rust stable/nightly, `bpf-linker`, and common `cargo` commands.
 - **[docs/6-references/audits/PHASE_1_TO_4_AUDIT_REPORT.md](./docs/6-references/audits/PHASE_1_TO_4_AUDIT_REPORT.md)** — Blueprint audit (tests, Miri/ASAN, matrix, FFI).
-- **Integration tests** under `aegis-ebpf/tests/` (many require root + full BPF; see test module docs and `sudo` + `--ignored` invocations).
+- **Integration tests** under `mace-ebpf/tests/` (many require root + full BPF; see test module docs and `sudo` + `--ignored` invocations).
 
 ---
 
 ## License
 
 - **Userspace Rust and shared tooling** (excluding the eBPF program sources): **MIT OR Apache-2.0**, at your option — see [LICENSE-MIT](./LICENSE-MIT) and [LICENSE-APACHE](./LICENSE-APACHE).
-- **eBPF program sources** (`aegis-ebpf-ebpf/`): **GPL-2.0 OR MIT**, at your option — see [LICENSE-GPL2](./LICENSE-GPL2) and [LICENSE-MIT](./LICENSE-MIT).
+- **eBPF program sources** (`mace-ebpf-ebpf/`): **GPL-2.0 OR MIT**, at your option — see [LICENSE-GPL2](./LICENSE-GPL2) and [LICENSE-MIT](./LICENSE-MIT).
 
 Unless you explicitly state otherwise, contributions are licensed under the same terms as the respective subtree you modify.
 
 ---
 
-*Aegis-eBPF — kernel insight with a stable FFI surface for the languages you already use.*
+*Mace-eBPF — kernel insight with a stable FFI surface for the languages you already use.*

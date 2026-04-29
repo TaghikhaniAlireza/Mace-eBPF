@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Guest: load pre-built aegis-ebpf + attach tracepoints; optional Step 2.3 suites
+# Guest: load pre-built mace-ebpf + attach tracepoints; optional Step 2.3 suites
 # =============================================================================
 set -euo pipefail
 
 ART="/vagrant/scripts/vm/artifacts"
-RESULT_DIR="${AEGIS_MATRIX_RESULT_DIR:-/vagrant/scripts/vm/matrix-results}"
+RESULT_DIR="${MACE_MATRIX_RESULT_DIR:-/vagrant/scripts/vm/matrix-results}"
 mkdir -p "$RESULT_DIR"
 
-VM="${AEGIS_VM_NAME:-unknown}"
+VM="${MACE_VM_NAME:-unknown}"
 OUT="$RESULT_DIR/${VM}.txt"
 
 {
-  echo "=== aegis kernel matrix ==="
+  echo "=== mace kernel matrix ==="
   echo "vm: $VM"
   echo "date: $(date -Is 2>/dev/null || date)"
   uname -a
@@ -20,22 +20,22 @@ OUT="$RESULT_DIR/${VM}.txt"
   dmesg -T 2>/dev/null | tail -n 20 || true
 } | tee "$OUT"
 
-if [[ ! -f "$ART/aegis-ebpf" ]]; then
-  echo "FAIL: missing $ART/aegis-ebpf (run ./scripts/vm/prepare-artifact.sh on the host)" | tee -a "$OUT"
+if [[ ! -f "$ART/mace-ebpf" ]]; then
+  echo "FAIL: missing $ART/mace-ebpf (run ./scripts/vm/prepare-artifact.sh on the host)" | tee -a "$OUT"
   exit 1
 fi
-if [[ ! -f "$ART/aegis-ebpf-loader" ]]; then
-  echo "FAIL: missing $ART/aegis-ebpf-loader" | tee -a "$OUT"
+if [[ ! -f "$ART/mace-ebpf-loader" ]]; then
+  echo "FAIL: missing $ART/mace-ebpf-loader" | tee -a "$OUT"
   exit 1
 fi
 
-chmod +x "$ART/aegis-ebpf-loader" || true
+chmod +x "$ART/mace-ebpf-loader" || true
 
-export AEGIS_EBPF_OBJECT="$ART/aegis-ebpf"
-export AEGIS_ARTIFACT_DIR="$ART"
+export MACE_EBPF_OBJECT="$ART/mace-ebpf"
+export MACE_ARTIFACT_DIR="$ART"
 
-echo "--- aegis-ebpf-loader ---" | tee -a "$OUT"
-if "$ART/aegis-ebpf-loader" "$ART/aegis-ebpf" 2>&1 | tee -a "$OUT"; then
+echo "--- mace-ebpf-loader ---" | tee -a "$OUT"
+if "$ART/mace-ebpf-loader" "$ART/mace-ebpf" 2>&1 | tee -a "$OUT"; then
   echo "RESULT: PASS (load+attach)" | tee -a "$OUT"
 else
   echo "RESULT: FAIL (load+attach)" | tee -a "$OUT"

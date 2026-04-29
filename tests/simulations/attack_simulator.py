@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Phase 2.2 — Attack simulation driver for Aegis-eBPF detection mapping.
+Phase 2.2 — Attack simulation driver for Mace-eBPF detection mapping.
 
 Runs synthetic scenarios intended to exercise eBPF + rule engine hooks.
-This script does **not** start Aegis; run your monitor separately with matching rules.
+This script does **not** start Mace; run your monitor separately with matching rules.
 
 **UID note:** When you run this script with `sudo`, every syscall in these scenarios
 runs as **effective UID 0 (root)**. Rules that pin `uid: 1000` will **not** match simulator
@@ -144,7 +144,7 @@ def main() -> int:
     scenario_c_shadow_and_ptrace()
     _hdr("All scenarios finished")
     print(
-        "  If Aegis is running with tests/simulations/rules.yaml, check the monitor for "
+        "  If Mace is running with tests/simulations/rules.yaml, check the monitor for "
         "SIM_* rule matches.",
         flush=True,
     )

@@ -12,22 +12,22 @@ mkdir -p "$DEST"
 
 echo "[prepare-artifact] workspace: $ROOT"
 
-cargo build --release -p aegis-ebpf-loader
-cp -v "$ROOT/target/release/aegis-ebpf-loader" "$DEST/"
+cargo build --release -p mace-ebpf-loader
+cp -v "$ROOT/target/release/mace-ebpf-loader" "$DEST/"
 
-cargo build -p aegis-ebpf
+cargo build -p mace-ebpf
 
-# Collect candidate BPF ELFs (exclude host binaries named aegis-ebpf under target/release).
+# Collect candidate BPF ELFs (exclude host binaries named mace-ebpf under target/release).
 mapfile -t CANDS < <(
   {
-    find "$ROOT/target" -path '*/bpfel-unknown-none/release/aegis-ebpf' -type f 2>/dev/null || true
-    find "$ROOT/target" -path '*/bpfel-unknown-none/debug/aegis-ebpf' -type f 2>/dev/null || true
-    find "$ROOT/target" -path '*/build/aegis-ebpf-*/out/aegis-ebpf' -type f 2>/dev/null || true
+    find "$ROOT/target" -path '*/bpfel-unknown-none/release/mace-ebpf' -type f 2>/dev/null || true
+    find "$ROOT/target" -path '*/bpfel-unknown-none/debug/mace-ebpf' -type f 2>/dev/null || true
+    find "$ROOT/target" -path '*/build/mace-ebpf-*/out/mace-ebpf' -type f 2>/dev/null || true
   } | sort -u
 )
 
 if [[ ${#CANDS[@]} -eq 0 ]]; then
-  echo "[prepare-artifact] ERROR: no aegis-ebpf BPF ELF found. Run: cargo build -p aegis-ebpf" >&2
+  echo "[prepare-artifact] ERROR: no mace-ebpf BPF ELF found. Run: cargo build -p mace-ebpf" >&2
   exit 1
 fi
 
@@ -48,10 +48,10 @@ for f in "${CANDS[@]}"; do
 done
 
 if [[ -z "$BEST" ]]; then
-  echo "[prepare-artifact] ERROR: no ELF aegis-ebpf candidates among: ${CANDS[*]}" >&2
+  echo "[prepare-artifact] ERROR: no ELF mace-ebpf candidates among: ${CANDS[*]}" >&2
   exit 1
 fi
 
-cp -v "$BEST" "$DEST/aegis-ebpf"
-echo "[prepare-artifact] OK: $DEST/aegis-ebpf (from $BEST)"
+cp -v "$BEST" "$DEST/mace-ebpf"
+echo "[prepare-artifact] OK: $DEST/mace-ebpf (from $BEST)"
 ls -la "$DEST"

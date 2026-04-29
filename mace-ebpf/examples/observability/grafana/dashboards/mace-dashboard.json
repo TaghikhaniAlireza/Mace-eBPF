@@ -1,0 +1,64 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "id": 1,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {"expr": "rate(mace_events_ingested_total[1m])", "legendFormat": "events/s", "refId": "A"}
+      ],
+      "title": "Events ingested rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "id": 2,
+      "targets": [
+        {"expr": "rate(mace_events_dropped_total[1m])", "legendFormat": "dropped/s", "refId": "A"}
+      ],
+      "title": "Events dropped rate",
+      "type": "timeseries"
+    },
+    {
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "id": 3,
+      "targets": [
+        {"expr": "rate(mace_alerts_fired_total[1m])", "legendFormat": "{{rule_id}}", "refId": "A"}
+      ],
+      "title": "Alerts fired by rule",
+      "type": "timeseries"
+    },
+    {
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "id": 4,
+      "targets": [
+        {"expr": "histogram_quantile(0.95, rate(mace_pipeline_latency_ns_bucket[1m]))", "legendFormat": "p95 ns", "refId": "A"}
+      ],
+      "title": "Pipeline latency p95 (ns)",
+      "type": "timeseries"
+    },
+    {
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 16},
+      "id": 5,
+      "targets": [
+        {"expr": "mace_reorder_buffer_size", "legendFormat": "reorder heap", "refId": "A"}
+      ],
+      "title": "Reorder buffer size",
+      "type": "timeseries"
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["mace"],
+  "templating": {"list": []},
+  "time": {"from": "now-15m", "to": "now"},
+  "title": "Mace eBPF Monitoring",
+  "uid": "mace-ebpf",
+  "version": 1
+}

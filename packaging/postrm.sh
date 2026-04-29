@@ -1,6 +1,6 @@
 #!/bin/sh
 set -e
-echo "Disabling aegis service..."
-systemctl disable aegis.service || true
+echo "Disabling mace service..."
+systemctl disable mace.service || true
 echo "Reloading systemd daemon..."
 systemctl daemon-reload

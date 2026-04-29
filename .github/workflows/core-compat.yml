@@ -16,20 +16,20 @@ on:
       - ".github/workflows/core-compat.yml"
       - "Cargo.toml"
       - "Cargo.lock"
-      - "aegis-ebpf/**"
-      - "aegis-ebpf-common/**"
-      - "aegis-ebpf-ebpf/**"
-      - "aegis-ebpf-loader/**"
+      - "mace-ebpf/**"
+      - "mace-ebpf-common/**"
+      - "mace-ebpf-ebpf/**"
+      - "mace-ebpf-loader/**"
   pull_request:
     branches: [main]
     paths:
       - ".github/workflows/core-compat.yml"
       - "Cargo.toml"
       - "Cargo.lock"
-      - "aegis-ebpf/**"
-      - "aegis-ebpf-common/**"
-      - "aegis-ebpf-ebpf/**"
-      - "aegis-ebpf-loader/**"
+      - "mace-ebpf/**"
+      - "mace-ebpf-common/**"
+      - "mace-ebpf-ebpf/**"
+      - "mace-ebpf-loader/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -91,7 +91,7 @@ jobs:
           shared-key: "core-compat-${{ matrix.os }}"
 
       - name: Build workspace (release eBPF object)
-        run: cargo build --release -p aegis-ebpf --verbose
+        run: cargo build --release -p mace-ebpf --verbose
 
       - name: Verifier load (BPF_PROG_LOAD for tracepoints)
         run: |
@@ -101,7 +101,7 @@ jobs:
             "HOME=${HOME}" \
             "RUSTUP_HOME=${RUSTUP_HOME:-${HOME}/.rustup}" \
             "CARGO_HOME=${CARGO_HOME:-${HOME}/.cargo}" \
-            cargo test --release --test verifier_load_test -p aegis-ebpf -- --ignored --nocapture
+            cargo test --release --test verifier_load_test -p mace-ebpf -- --ignored --nocapture
 
       - name: Tracepoint attach + ringbuf (synthetic mprotect)
         run: |
@@ -111,4 +111,4 @@ jobs:
             "HOME=${HOME}" \
             "RUSTUP_HOME=${RUSTUP_HOME:-${HOME}/.rustup}" \
             "CARGO_HOME=${CARGO_HOME:-${HOME}/.cargo}" \
-            cargo test --release --test tracepoint_attach_test -p aegis-ebpf -- --ignored --nocapture
+            cargo test --release --test tracepoint_attach_test -p mace-ebpf -- --ignored --nocapture

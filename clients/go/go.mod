@@ -1,4 +1,4 @@
-module github.com/aegis-ebpf/sdk/clients/go
+module github.com/mace-ebpf/sdk/clients/go
 
 go 1.21
 

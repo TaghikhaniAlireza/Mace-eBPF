@@ -1,9 +1,9 @@
-# Default agent configuration (shipped with the aegis-agent package).
-# Edit paths as needed; restart the service after changes: systemctl restart aegis
+# Default agent configuration (shipped with the mace-agent package).
+# Edit paths as needed; restart the service after changes: systemctl restart mace
 
 logging:
-  path: /var/log/aegis/events.log
+  path: /var/log/mace/events.log
   format: json
 
 rules:
-  path: /etc/aegis/rules.yaml
+  path: /etc/mace/rules.yaml

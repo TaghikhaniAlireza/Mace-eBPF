@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Trigger a memfd_create syscall for aegis-ebpf tracepoint validation."""
+"""Trigger a memfd_create syscall for mace-ebpf tracepoint validation."""
 
 import os
 
 
 def main() -> int:
-    name = "aegis-ebpf-memfd-test"
-    payload = b"aegis-ebpf memfd payload\n"
+    name = "mace-ebpf-memfd-test"
+    payload = b"mace-ebpf memfd payload\n"
 
     fd = os.memfd_create(name, flags=0)
     try:

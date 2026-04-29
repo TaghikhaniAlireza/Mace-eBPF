@@ -12,11 +12,11 @@ mkdir -p "$RESULT_DIR"
 
 SUMMARY="$RESULT_DIR/summary.txt"
 {
-  echo "aegis-ebpf kernel matrix summary"
+  echo "mace-ebpf kernel matrix summary"
   date -Is 2>/dev/null || date
 } >"$SUMMARY"
 
-if [[ ! -f "$ROOT/scripts/vm/artifacts/aegis-ebpf" ]]; then
+if [[ ! -f "$ROOT/scripts/vm/artifacts/mace-ebpf" ]]; then
   echo "Run ./scripts/vm/prepare-artifact.sh first." | tee -a "$SUMMARY" >&2
   exit 1
 fi

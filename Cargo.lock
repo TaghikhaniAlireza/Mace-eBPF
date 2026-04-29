@@ -3,78 +3,6 @@
 version = 4
 
 [[package]]
-name = "aegis-ebpf"
-version = "0.1.0"
-dependencies = [
- "aegis-ebpf-common",
- "aegis-ebpf-ebpf",
- "anyhow",
- "arc-swap",
- "async-trait",
- "aya",
- "aya-build",
- "aya-log",
- "cargo_metadata",
- "cbindgen",
- "criterion",
- "env_logger",
- "futures",
- "k8s-openapi",
- "kube",
- "libc",
- "log",
- "metrics",
- "metrics-exporter-prometheus",
- "moka",
- "notify",
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
- "prost 0.13.5",
- "prost-build",
- "prost-types",
- "regex",
- "reqwest",
- "rustls-webpki",
- "serde",
- "serde_json",
- "serde_yaml",
- "serial_test",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-log",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
-name = "aegis-ebpf-common"
-version = "0.1.0"
-dependencies = [
- "aya",
-]
-
-[[package]]
-name = "aegis-ebpf-ebpf"
-version = "0.1.0"
-dependencies = [
- "aegis-ebpf-common",
- "aya-ebpf",
- "aya-log-ebpf",
- "which 6.0.3",
-]
-
-[[package]]
-name = "aegis-ebpf-loader"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "aya",
- "libc",
-]
-
-[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1652,6 +1580,78 @@ name = "lru-slab"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
+
+[[package]]
+name = "mace-ebpf"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "async-trait",
+ "aya",
+ "aya-build",
+ "aya-log",
+ "cargo_metadata",
+ "cbindgen",
+ "criterion",
+ "env_logger",
+ "futures",
+ "k8s-openapi",
+ "kube",
+ "libc",
+ "log",
+ "mace-ebpf-common",
+ "mace-ebpf-ebpf",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "moka",
+ "notify",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "prost 0.13.5",
+ "prost-build",
+ "prost-types",
+ "regex",
+ "reqwest",
+ "rustls-webpki",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "serial_test",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-log",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "mace-ebpf-common"
+version = "0.1.0"
+dependencies = [
+ "aya",
+]
+
+[[package]]
+name = "mace-ebpf-ebpf"
+version = "0.1.0"
+dependencies = [
+ "aya-ebpf",
+ "aya-log-ebpf",
+ "mace-ebpf-common",
+ "which 6.0.3",
+]
+
+[[package]]
+name = "mace-ebpf-loader"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "aya",
+ "libc",
+]
 
 [[package]]
 name = "matchers"

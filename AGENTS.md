@@ -2,15 +2,15 @@
 
 ## Overview
 
-**aegis-ebpf** is a Linux eBPF security/monitoring tool written in Rust using the [aya](https://github.com/aya-rs/aya) framework. It attaches to the `sched_process_exec` tracepoint to monitor process execution events.
+**mace-ebpf** is a Linux eBPF security/monitoring tool written in Rust using the [aya](https://github.com/aya-rs/aya) framework. It attaches to the `sched_process_exec` tracepoint to monitor process execution events.
 
 ### Workspace crates
 
 | Crate | Purpose |
 |---|---|
-| `aegis-ebpf` | Userspace binary — loads and attaches the eBPF program |
-| `aegis-ebpf-ebpf` | `#![no_std]` eBPF kernel-side program |
-| `aegis-ebpf-common` | `#![no_std]` shared types library |
+| `mace-ebpf` | Userspace binary — loads and attaches the eBPF program |
+| `mace-ebpf-ebpf` | `#![no_std]` eBPF kernel-side program |
+| `mace-ebpf-common` | `#![no_std]` shared types library |
 
 ## Cursor Cloud specific instructions
 
@@ -35,10 +35,10 @@ Standard commands (see `README.md` for full details):
 The binary must run with **root privileges** (`.cargo/config.toml` sets `runner = "sudo -E"`). Use:
 
 ```
-sudo RUST_LOG=info ./target/release/aegis-ebpf
+sudo RUST_LOG=info ./target/release/mace-ebpf
 ```
 
-**Aegis core log filter (optional):** `AEGIS_LOG_LEVEL=TRACE|INFO|SUPPRESSED|EVENT|ALERT` filters `[Aegis][LEVEL] …` lines on stderr from the Rust pipeline (independent of `RUST_LOG`). Embedded callers can use `aegis_set_log_level(0..4)` instead. See [docs/4-configuration/logging.md](docs/4-configuration/logging.md) for behavior (including why `ALERT` can still show `suppressed=true` inside `[Aegis][ALERT]` lines, and how that differs from the Go example’s stdout labels).
+**Mace core log filter (optional):** `MACE_LOG_LEVEL=TRACE|INFO|SUPPRESSED|EVENT|ALERT` filters `[Mace][LEVEL] …` lines on stderr from the Rust pipeline (independent of `RUST_LOG`). Embedded callers can use `mace_set_log_level(0..4)` instead. See [docs/4-configuration/logging.md](docs/4-configuration/logging.md) for behavior (including why `ALERT` can still show `suppressed=true` inside `[Mace][ALERT]` lines, and how that differs from the Go example’s stdout labels).
 
 ### Cloud VM limitation
 

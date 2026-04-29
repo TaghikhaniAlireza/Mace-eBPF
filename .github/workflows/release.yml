@@ -1,7 +1,7 @@
 # =============================================================================
-# Aegis-eBPF — GitHub Release
+# Mace-eBPF — GitHub Release
 # =============================================================================
-# Tag push `v*`: release Rust FFI tarball, build aegis-agent (CGO + static Rust),
+# Tag push `v*`: release Rust FFI tarball, build mace-agent (CGO + static Rust),
 # produce .deb via nFPM, and publish a GitHub Release.
 #
 # Rust workspace needs nightly + rust-src + bpf-linker for the nested eBPF build.
@@ -83,12 +83,12 @@ jobs:
       - name: Build release workspace (Rust)
         run: cargo build --release --verbose
 
-      - name: Build aegis-agent (Go + CGO, static Rust release lib)
+      - name: Build mace-agent (Go + CGO, static Rust release lib)
         run: |
           set -euxo pipefail
           mkdir -p build
           cd clients/go
-          CGO_ENABLED=1 go build -tags aegis_static_release -o "${GITHUB_WORKSPACE}/build/aegis-agent" ./cmd/aegis-agent
+          CGO_ENABLED=1 go build -tags mace_static_release -o "${GITHUB_WORKSPACE}/build/mace-agent" ./cmd/mace-agent
 
       - name: Package .deb with nFPM
         run: |
@@ -101,23 +101,23 @@ jobs:
       - name: Stage FFI tarball (lib + header)
         run: |
           set -euxo pipefail
-          STAGE="${RUNNER_TEMP}/aegis-ebpf-release"
+          STAGE="${RUNNER_TEMP}/mace-ebpf-release"
           rm -rf "${STAGE}"
           mkdir -p "${STAGE}"
 
-          cp -v target/release/libaegis_ebpf.so "${STAGE}/"
-          cp -v target/release/libaegis_ebpf.a "${STAGE}/"
+          cp -v target/release/libmace_ebpf.so "${STAGE}/"
+          cp -v target/release/libmace_ebpf.a "${STAGE}/"
 
-          HEADER="${GITHUB_WORKSPACE}/aegis-ebpf/include/aegis.h"
+          HEADER="${GITHUB_WORKSPACE}/mace-ebpf/include/mace.h"
           if [[ -f "${HEADER}" ]]; then
             cp -v "${HEADER}" "${STAGE}/"
           else
-            echo "::warning::aegis.h not found at ${HEADER}; tarball will contain only libraries"
+            echo "::warning::mace.h not found at ${HEADER}; tarball will contain only libraries"
           fi
 
-          tar -czf "${GITHUB_WORKSPACE}/aegis-ebpf-linux-amd64.tar.gz" -C "${STAGE}" .
-          ls -la "${GITHUB_WORKSPACE}/aegis-ebpf-linux-amd64.tar.gz"
-          tar -tzf "${GITHUB_WORKSPACE}/aegis-ebpf-linux-amd64.tar.gz"
+          tar -czf "${GITHUB_WORKSPACE}/mace-ebpf-linux-amd64.tar.gz" -C "${STAGE}" .
+          ls -la "${GITHUB_WORKSPACE}/mace-ebpf-linux-amd64.tar.gz"
+          tar -tzf "${GITHUB_WORKSPACE}/mace-ebpf-linux-amd64.tar.gz"
 
       - name: Create GitHub Release and upload assets
         uses: softprops/action-gh-release@v2
@@ -125,7 +125,7 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           files: |
-            aegis-ebpf-linux-amd64.tar.gz
+            mace-ebpf-linux-amd64.tar.gz
             *.deb
           generate_release_notes: true
         env:

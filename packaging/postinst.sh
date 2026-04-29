@@ -2,7 +2,7 @@
 set -e
 echo "Reloading systemd daemon..."
 systemctl daemon-reload
-echo "Enabling aegis service to start on boot..."
-systemctl enable aegis.service
-echo "Starting aegis service..."
-systemctl start aegis.service
+echo "Enabling mace service to start on boot..."
+systemctl enable mace.service
+echo "Starting mace service..."
+systemctl start mace.service

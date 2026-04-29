@@ -1,4 +1,4 @@
-// Package agentconfig holds YAML configuration for aegis-agent.
+// Package agentconfig holds YAML configuration for mace-agent.
 package agentconfig
 
 import (
@@ -9,7 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config is the root YAML document for aegis-agent.
+// Config is the root YAML document for mace-agent.
 type Config struct {
 	Logging LoggingConfig `yaml:"logging"`
 	Rules   RulesConfig   `yaml:"rules"`
@@ -21,7 +21,7 @@ type LoggingConfig struct {
 	Format string `yaml:"format"` // "json" or "text"
 }
 
-// RulesConfig points at the rule YAML file or directory (same semantics as aegis.LoadRulesFile).
+// RulesConfig points at the rule YAML file or directory (same semantics as mace.LoadRulesFile).
 type RulesConfig struct {
 	Path string `yaml:"path"`
 }

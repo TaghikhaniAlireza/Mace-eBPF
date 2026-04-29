@@ -1,6 +1,6 @@
 # Agent configuration (`config.yaml` and rules)
 
-The standalone **`aegis-agent`** (`clients/go/cmd/aegis-agent`) reads a single YAML file passed with **`--config`** / **`-c`**. Parsing and validation are implemented in **`clients/go/internal/agentconfig/config.go`**.
+The standalone **`mace-agent`** (`clients/go/cmd/mace-agent`) reads a single YAML file passed with **`--config`** / **`-c`**. Parsing and validation are implemented in **`clients/go/internal/agentconfig/config.go`**.
 
 ## Agent `config.yaml` schema
 
@@ -19,17 +19,17 @@ The agent uses **logrus** with **`JSONFormatter`** or **`TextFormatter`** writin
 
 | Field | Type | Description |
 |-------|------|-------------|
-| **`path`** | string | Passed to **`aegis.LoadRulesFile`** in the Go SDK — may be a **file** or a **directory** of `.yaml`/`.yml` (same semantics as the Rust rule loader: non-recursive directory merge in sorted path order). |
+| **`path`** | string | Passed to **`mace.LoadRulesFile`** in the Go SDK — may be a **file** or a **directory** of `.yaml`/`.yml` (same semantics as the Rust rule loader: non-recursive directory merge in sorted path order). |
 
 ### Example (matches `packaging/config.yaml`)
 
 ```yaml
 logging:
-  path: /var/log/aegis/events.log
+  path: /var/log/mace/events.log
   format: json
 
 rules:
-  path: /etc/aegis/rules.yaml
+  path: /etc/mace/rules.yaml
 ```
 
 ## Rules YAML (`rules.yaml`)
@@ -45,12 +45,12 @@ The full rule language is documented in [Rules engine](../3-concepts/rules-engin
 
 The **`.deb`** installs:
 
-- **`/etc/aegis/config.yaml`** — conffile; edit and `systemctl restart aegis.service`.
-- **`/etc/aegis/rules.yaml`** — starter rules; replace or point **`rules.path`** at a directory.
+- **`/etc/mace/config.yaml`** — conffile; edit and `systemctl restart mace.service`.
+- **`/etc/mace/rules.yaml`** — starter rules; replace or point **`rules.path`** at a directory.
 
 ## Environment variables (optional)
 
-The **agent** itself does not read `AEGIS_RULES_FILE` (that is specific to **`clients/go/examples`**). For Rust **core diagnostics** on stderr, see [Core logging](./logging.md) (`AEGIS_LOG_LEVEL`, `aegis_set_log_level`).
+The **agent** itself does not read `MACE_RULES_FILE` (that is specific to **`clients/go/examples`**). For Rust **core diagnostics** on stderr, see [Core logging](./logging.md) (`MACE_LOG_LEVEL`, `mace_set_log_level`).
 
 ## Related
 

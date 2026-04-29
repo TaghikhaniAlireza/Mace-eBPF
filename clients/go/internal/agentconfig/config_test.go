@@ -10,10 +10,10 @@ func TestLoad_valid(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	content := `logging:
-  path: /var/log/aegis/events.log
+  path: /var/log/mace/events.log
   format: json
 rules:
-  path: /etc/aegis/rules.yaml
+  path: /etc/mace/rules.yaml
 `
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatal(err)
@@ -22,10 +22,10 @@ rules:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Logging.Path != "/var/log/aegis/events.log" || c.Logging.Format != "json" {
+	if c.Logging.Path != "/var/log/mace/events.log" || c.Logging.Format != "json" {
 		t.Fatalf("logging: %+v", c.Logging)
 	}
-	if c.Rules.Path != "/etc/aegis/rules.yaml" {
+	if c.Rules.Path != "/etc/mace/rules.yaml" {
 		t.Fatalf("rules: %+v", c.Rules)
 	}
 }

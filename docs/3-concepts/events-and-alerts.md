@@ -1,6 +1,6 @@
 # Events and alerts
 
-After the pipeline evaluates YAML **rules** and **suppressions**, it emits one **JSON object per syscall observation** (per enriched event). In Rust this structure is **`StandardizedEvent`** (`aegis-ebpf/src/alert.rs`); in Go the SDK type is **`AegisEvent`** (`clients/go/aegis/aegis.go`).
+After the pipeline evaluates YAML **rules** and **suppressions**, it emits one **JSON object per syscall observation** (per enriched event). In Rust this structure is **`StandardizedEvent`** (`mace-ebpf/src/alert.rs`); in Go the SDK type is **`MaceEvent`** (`clients/go/mace/mace.go`).
 
 ## JSON schema (exported event)
 
@@ -62,15 +62,15 @@ The JSON **always** includes **`matched_rules`** (possibly empty). Operational m
 | non-empty | empty | **Alert** — at least one rule matched and no suppression blocked alerting. |
 | non-empty | non-empty | **Suppressed alert** — rules matched; YAML suppressions prevented firing alert callbacks, but the event is still exported with both lists populated. |
 
-Downstream consumers (for example **`aegis-agent`** or the Go **examples** program) may print human-readable labels such as `ALERT`, `EVENT`, or `SUPPRESSED_ALERT`. Those labels are **application logic**, not the same as Rust **`[Aegis][LEVEL]`** stderr diagnostics — see [Core logging](../4-configuration/logging.md).
+Downstream consumers (for example **`mace-agent`** or the Go **examples** program) may print human-readable labels such as `ALERT`, `EVENT`, or `SUPPRESSED_ALERT`. Those labels are **application logic**, not the same as Rust **`[Mace][LEVEL]`** stderr diagnostics — see [Core logging](../4-configuration/logging.md).
 
 ## Delivery paths
 
 | Consumer | Mechanism |
 |----------|-----------|
-| **Go SDK** | `aegis.NewClient` → `client.Events()` channel of **`AegisEvent`**. |
-| **FFI** | `register_event_callback` receives raw JSON string per event. |
-| **aegis-agent** | unmarshals internally and writes **logrus** JSON or text to **`logging.path`**. |
+| **Go SDK** | `mace.NewClient` → `client.Events()` channel of **`MaceEvent`**. |
+| **FFI** | `mace_register_event_callback` receives raw JSON string per event. |
+| **mace-agent** | unmarshals internally and writes **logrus** JSON or text to **`logging.path`**. |
 
 ## Related
 

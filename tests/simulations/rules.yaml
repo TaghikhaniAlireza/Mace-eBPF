@@ -1,5 +1,5 @@
 # Validation rules for Phase 2.2 attack simulations (`tests/simulations/attack_simulator.py`).
-# Load this file into the Aegis pipeline while the sensor runs as root.
+# Load this file into the Mace pipeline while the sensor runs as root.
 #
 # Layout tip: one file is fine for demos. For production, prefer a directory passed as rules_path —
 # every `*.yaml` / `*.yml` is merged in sorted order (e.g. `10-rules.yaml`, `90-suppressions.yaml`).
@@ -92,7 +92,7 @@ suppressions:
       pathname_pattern: ".*/proc/(self/stat|[0-9]+/stat)$"
 
   - id: "SUPP_PIPELINE_PASSWD_ENRICHMENT"
-    name: "Aegis pipeline passwd enrichment"
+    name: "Mace pipeline passwd enrichment"
     description: "Tokio worker threads resolve uid→username via /etc/passwd."
     conditions:
       syscall: "openat"

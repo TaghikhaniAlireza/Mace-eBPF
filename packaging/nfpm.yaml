@@ -1,34 +1,34 @@
-# nFPM package definition for aegis-agent (.deb).
+# nFPM package definition for mace-agent (.deb).
 # Set VERSION_TAG in the environment (e.g. 1.2.3 from tag v1.2.3) before running nfpm.
 
-name: aegis-agent
+name: mace-agent
 arch: amd64
 platform: linux
 version: "${VERSION_TAG}"
 version_schema: semver
-maintainer: "Aegis eBPF Maintainers <https://github.com/TaghikhaniAlireza/Aegis-eBPF>"
-description: "Aegis eBPF security agent — syscall monitoring and YAML rule engine."
-homepage: "https://github.com/TaghikhaniAlireza/Aegis-eBPF"
+maintainer: "Mace eBPF Maintainers <https://github.com/TaghikhaniAlireza/Mace-eBPF>"
+description: "Mace eBPF security agent — syscall monitoring and YAML rule engine."
+homepage: "https://github.com/TaghikhaniAlireza/Mace-eBPF"
 license: "MIT OR Apache-2.0"
 
 contents:
-  - src: ./build/aegis-agent
-    dst: /usr/bin/aegis-agent
+  - src: ./build/mace-agent
+    dst: /usr/bin/mace-agent
     file_info:
       mode: 0755
 
-  - src: ./target/release/libaegis_ebpf.so
-    dst: /usr/lib/libaegis_ebpf.so
+  - src: ./target/release/libmace_ebpf.so
+    dst: /usr/lib/libmace_ebpf.so
 
-  - src: ./packaging/aegis.service
-    dst: /etc/systemd/system/aegis.service
+  - src: ./packaging/mace.service
+    dst: /etc/systemd/system/mace.service
 
   - src: ./packaging/config.yaml
-    dst: /etc/aegis/config.yaml
+    dst: /etc/mace/config.yaml
     type: config
 
   - src: ./packaging/rules.yaml
-    dst: /etc/aegis/rules.yaml
+    dst: /etc/mace/rules.yaml
     type: config
 
 scripts:

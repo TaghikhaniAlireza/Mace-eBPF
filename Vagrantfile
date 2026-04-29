@@ -1,15 +1,15 @@
 # frozen_string_literal: true
 
 # =============================================================================
-# Aegis-eBPF — Kernel compatibility matrix (CO-RE smoke test)
+# Mace-eBPF — Kernel compatibility matrix (CO-RE smoke test)
 # =============================================================================
 #
-# Runs the *same* pre-built BPF object (`aegis-ebpf`) + userspace loader on several
+# Runs the *same* pre-built BPF object (`mace-ebpf`) + userspace loader on several
 # guest kernels without recompiling eBPF inside the VM.
 #
 # Prerequisites (host):
 #   - Vagrant + VirtualBox (or change `vm.provider` below to libvirt / vmware)
-#   - `cargo build -p aegis-ebpf` and `cargo build --release -p aegis-ebpf-loader` on Linux,
+#   - `cargo build -p mace-ebpf` and `cargo build --release -p mace-ebpf-loader` on Linux,
 #     then `./scripts/vm/prepare-artifact.sh` to copy artifacts into scripts/vm/artifacts/
 #
 # Usage:
@@ -58,7 +58,7 @@ Vagrant.configure("2") do |config|
   matrix.each do |name, meta|
     config.vm.define name, autostart: false do |node|
       node.vm.box = meta[:box]
-      node.vm.hostname = "aegis-#{name}"
+      node.vm.hostname = "mace-#{name}"
 
       # Sync the repo so /vagrant/scripts/vm/... is available in the guest.
       # Omit `type:` to use the provider default (VirtualBox shared folders, libvirt 9p, etc.).
@@ -66,18 +66,18 @@ Vagrant.configure("2") do |config|
 
       # Optional: pin exact kernel packages (disabled by default — edit script to enable).
       node.vm.provision "shell", path: "scripts/vm/provision-kernel.sh", env: {
-        "AEGIS_VM_NAME" => name,
-        "AEGIS_KERNEL_NOTE" => meta[:note],
+        "MACE_VM_NAME" => name,
+        "MACE_KERNEL_NOTE" => meta[:note],
       }
 
       node.vm.provision "shell", path: "scripts/vm/provision-common.sh", env: {
-        "AEGIS_VM_NAME" => name,
-        "AEGIS_KERNEL_NOTE" => meta[:note],
+        "MACE_VM_NAME" => name,
+        "MACE_KERNEL_NOTE" => meta[:note],
       }
 
       # Load + attach eBPF (requires root). Extension hooks for Step 2.3 live in run-test.sh.
       node.vm.provision "shell", path: "scripts/vm/run-test.sh", privileged: true, env: {
-        "AEGIS_VM_NAME" => name,
+        "MACE_VM_NAME" => name,
       }
     end
   end

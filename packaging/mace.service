@@ -1,0 +1,11 @@
+[Unit]
+Description=Mace eBPF Security Agent
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/mace-agent --config /etc/mace/config.yaml
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target

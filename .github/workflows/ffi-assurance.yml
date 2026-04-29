@@ -2,7 +2,7 @@
 # FFI assurance: Miri + AddressSanitizer (mandatory on main / PRs)
 # =============================================================================
 # Runs targeted Miri tests on the FFI/arena surface and ASAN on the full
-# aegis-ebpf library test suite. Uses the same script as local developers.
+# mace-ebpf library test suite. Uses the same script as local developers.
 # =============================================================================
 
 name: FFI assurance
@@ -15,9 +15,9 @@ on:
       - "run_memory_checks.sh"
       - "Cargo.toml"
       - "Cargo.lock"
-      - "aegis-ebpf/**"
-      - "aegis-ebpf-common/**"
-      - "aegis-ebpf-ebpf/**"
+      - "mace-ebpf/**"
+      - "mace-ebpf-common/**"
+      - "mace-ebpf-ebpf/**"
   pull_request:
     branches: [main]
     paths:
@@ -25,9 +25,9 @@ on:
       - "run_memory_checks.sh"
       - "Cargo.toml"
       - "Cargo.lock"
-      - "aegis-ebpf/**"
-      - "aegis-ebpf-common/**"
-      - "aegis-ebpf-ebpf/**"
+      - "mace-ebpf/**"
+      - "mace-ebpf-common/**"
+      - "mace-ebpf-ebpf/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

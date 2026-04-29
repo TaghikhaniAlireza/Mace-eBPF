@@ -4,7 +4,7 @@
 # =============================================================================
 #
 # Strategy:
-#   1. Start `aegis-ebpf-loader --daemon` so tracepoints stay attached during the test.
+#   1. Start `mace-ebpf-loader --daemon` so tracepoints stay attached during the test.
 #   2. Spawn many short-lived children that call mmap() and exit quickly, maximizing the window
 #      where sys_enter_* may record into pending_syscalls while the task can disappear before
 #      sys_exit_* (TOCTOU class of issues). The eBPF program uses LRU maps so unbounded growth
@@ -15,12 +15,12 @@
 #        - dmesg for aya_log warnings ("pending syscall insert failed", ringbuf failures)
 #
 # Tunables (environment):
-#   AEGIS_LRU_BATCHES       — number of outer loop iterations (default: 40)
-#   AEGIS_LRU_CHILDREN      — children per batch (default: 200)
-#   AEGIS_LRU_SAMPLE_SEC    — seconds between metric samples (default: 2)
-#   AEGIS_LRU_MAX_MEM_DROP_KB — fail if MemAvailable drops more than this many KB vs baseline
+#   MACE_LRU_BATCHES       — number of outer loop iterations (default: 40)
+#   MACE_LRU_CHILDREN      — children per batch (default: 200)
+#   MACE_LRU_SAMPLE_SEC    — seconds between metric samples (default: 2)
+#   MACE_LRU_MAX_MEM_DROP_KB — fail if MemAvailable drops more than this many KB vs baseline
 #                               (default: 524288 = 512 MiB; set lower to be stricter)
-#   AEGIS_LRU_REQUIRE_BPFTOOL — if set to 1, fail when bpftool is missing (default: 0)
+#   MACE_LRU_REQUIRE_BPFTOOL — if set to 1, fail when bpftool is missing (default: 0)
 #
 # Pass criteria:
 #   - No sustained MemAvailable collapse beyond threshold (heuristic; not a perfect BPF map RSS read)
@@ -32,17 +32,17 @@
 # =============================================================================
 set -euo pipefail
 
-ART="${AEGIS_ARTIFACT_DIR:-/vagrant/scripts/vm/artifacts}"
-LOADER="$ART/aegis-ebpf-loader"
-OBJ="$ART/aegis-ebpf"
+ART="${MACE_ARTIFACT_DIR:-/vagrant/scripts/vm/artifacts}"
+LOADER="$ART/mace-ebpf-loader"
+OBJ="$ART/mace-ebpf"
 
-BATCHES="${AEGIS_LRU_BATCHES:-40}"
-CHILDREN="${AEGIS_LRU_CHILDREN:-200}"
-SAMPLE_SEC="${AEGIS_LRU_SAMPLE_SEC:-2}"
-MAX_DROP_KB="${AEGIS_LRU_MAX_MEM_DROP_KB:-524288}"
-REQUIRE_BPFTOOL="${AEGIS_LRU_REQUIRE_BPFTOOL:-0}"
+BATCHES="${MACE_LRU_BATCHES:-40}"
+CHILDREN="${MACE_LRU_CHILDREN:-200}"
+SAMPLE_SEC="${MACE_LRU_SAMPLE_SEC:-2}"
+MAX_DROP_KB="${MACE_LRU_MAX_MEM_DROP_KB:-524288}"
+REQUIRE_BPFTOOL="${MACE_LRU_REQUIRE_BPFTOOL:-0}"
 
-LOG_TAG="[aegis-lru-suite]"
+LOG_TAG="[mace-lru-suite]"
 FAIL=0
 
 log() { echo "$LOG_TAG $*"; }
@@ -95,7 +95,7 @@ if [[ ! -x "$LOADER" ]] || [[ ! -f "$OBJ" ]]; then
   exit 1
 fi
 
-export AEGIS_EBPF_OBJECT="$OBJ"
+export MACE_EBPF_OBJECT="$OBJ"
 
 if ! command -v bpftool >/dev/null 2>&1 && [[ "$REQUIRE_BPFTOOL" == "1" ]]; then
   log "FAIL: bpftool required but not installed"

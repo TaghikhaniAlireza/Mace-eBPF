@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Trigger a ptrace(PTRACE_ATTACH) syscall for aegis-ebpf tracepoint validation."""
+"""Trigger a ptrace(PTRACE_ATTACH) syscall for mace-ebpf tracepoint validation."""
 
 import ctypes
 import os

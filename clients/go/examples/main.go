@@ -1,24 +1,24 @@
-// Example security monitor: [aegis.NewClient] + [aegis.Client.Events] channel, load YAML rules, start embedded engine.
+// Example security monitor: [mace.NewClient] + [mace.Client.Events] channel, load YAML rules, start embedded engine.
 //
-// From `clients/go/examples`, after `cargo build -p aegis-ebpf` (links target/debug/libaegis_ebpf.a):
+// From `clients/go/examples`, after `cargo build -p mace-ebpf` (links target/debug/libmace_ebpf.a):
 //
 //	sudo env PATH="$PATH" CGO_ENABLED=1 go run .
 //
-// Release Rust + static link: `cargo build --release -p aegis-ebpf` then:
+// Release Rust + static link: `cargo build --release -p mace-ebpf` then:
 //
-//	sudo env PATH="$PATH" CGO_ENABLED=1 go run -tags aegis_static_release .
+//	sudo env PATH="$PATH" CGO_ENABLED=1 go run -tags mace_static_release .
 //
-// Production-style default: `/etc/aegis/rules.yaml` when that file exists (override with env).
+// Production-style default: `/etc/mace/rules.yaml` when that file exists (override with env).
 // Otherwise falls back to repo `tests/simulations/rules.yaml` (three levels up). Override with:
 //
-//	AEGIS_RULES_FILE=/absolute/path/to/rules.yaml
+//	MACE_RULES_FILE=/absolute/path/to/rules.yaml
 //
-// Optional: AEGIS_LOG_LEVEL=TRACE|INFO|SUPPRESSED|EVENT|ALERT filters Rust [Aegis][LEVEL] lines on stderr
+// Optional: MACE_LOG_LEVEL=TRACE|INFO|SUPPRESSED|EVENT|ALERT filters Rust [Mace][LEVEL] lines on stderr
 // (see docs/4-configuration/logging.md). This example calls SetLogLevel after InitEngine when the env var is set.
 //
 // For a minimal demo only (whoami), set:
 //
-//	AEGIS_RULES_DEMO=1
+//	MACE_RULES_DEMO=1
 //
 // In another terminal run `whoami` or `python3 tests/simulations/attack_simulator.py`.
 package main
@@ -31,7 +31,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/aegis-ebpf/sdk/clients/go/aegis"
+	"github.com/mace-ebpf/sdk/clients/go/mace"
 )
 
 const demoRuleYAML = `rules:
@@ -46,10 +46,10 @@ const demoRuleYAML = `rules:
 `
 
 func resolveRulesPath() string {
-	if p := os.Getenv("AEGIS_RULES_FILE"); p != "" {
+	if p := os.Getenv("MACE_RULES_FILE"); p != "" {
 		return p
 	}
-	const systemDefault = "/etc/aegis/rules.yaml"
+	const systemDefault = "/etc/mace/rules.yaml"
 	if st, err := os.Stat(systemDefault); err == nil && !st.IsDir() {
 		return systemDefault
 	}
@@ -57,8 +57,8 @@ func resolveRulesPath() string {
 }
 
 func loadRulesForEngine() (rulesLabel string, err error) {
-	if os.Getenv("AEGIS_RULES_DEMO") == "1" {
-		err = aegis.LoadRules(demoRuleYAML)
+	if os.Getenv("MACE_RULES_DEMO") == "1" {
+		err = mace.LoadRules(demoRuleYAML)
 		return "(embedded demo TEST_WHOAMI)", err
 	}
 	path := resolveRulesPath()
@@ -73,10 +73,10 @@ func loadRulesForEngine() (rulesLabel string, err error) {
 		if rerr != nil {
 			return rulesLabel, rerr
 		}
-		err = aegis.LoadRules(yaml)
+		err = mace.LoadRules(yaml)
 		return rulesLabel, err
 	}
-	err = aegis.LoadRulesFile(path)
+	err = mace.LoadRulesFile(path)
 	return rulesLabel, err
 }
 
@@ -87,25 +87,25 @@ func loadRulesYAMLFromPath(path string) (yaml string, abs string, err error) {
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", abs, fmt.Errorf("read rules file %q (resolved %s): %w\nSet AEGIS_RULES_FILE or place rules at /etc/aegis/rules.yaml", path, abs, err)
+		return "", abs, fmt.Errorf("read rules file %q (resolved %s): %w\nSet MACE_RULES_FILE or place rules at /etc/mace/rules.yaml", path, abs, err)
 	}
 	return string(data), abs, nil
 }
 
-func applyAegisLogLevelFromEnv(s string) error {
+func applyMaceLogLevelFromEnv(s string) error {
 	switch strings.ToUpper(strings.TrimSpace(s)) {
 	case "TRACE":
-		return aegis.SetLogLevel(aegis.LogLevelTrace)
+		return mace.SetLogLevel(mace.LogLevelTrace)
 	case "INFO":
-		return aegis.SetLogLevel(aegis.LogLevelInfo)
+		return mace.SetLogLevel(mace.LogLevelInfo)
 	case "SUPPRESSED":
-		return aegis.SetLogLevel(aegis.LogLevelSuppressed)
+		return mace.SetLogLevel(mace.LogLevelSuppressed)
 	case "EVENT":
-		return aegis.SetLogLevel(aegis.LogLevelEvent)
+		return mace.SetLogLevel(mace.LogLevelEvent)
 	case "ALERT":
-		return aegis.SetLogLevel(aegis.LogLevelAlert)
+		return mace.SetLogLevel(mace.LogLevelAlert)
 	default:
-		return fmt.Errorf("unknown AEGIS_LOG_LEVEL %q (want TRACE, INFO, SUPPRESSED, EVENT, ALERT)", s)
+		return fmt.Errorf("unknown MACE_LOG_LEVEL %q (want TRACE, INFO, SUPPRESSED, EVENT, ALERT)", s)
 	}
 }
 
@@ -115,7 +115,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	client, err := aegis.NewClient(256)
+	client, err := mace.NewClient(256)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -140,16 +140,16 @@ func main() {
 		}
 	}()
 
-	if err := aegis.InitEngine(); err != nil {
+	if err := mace.InitEngine(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	if lvl := os.Getenv("AEGIS_LOG_LEVEL"); lvl != "" {
-		if err := applyAegisLogLevelFromEnv(lvl); err != nil {
-			fmt.Fprintf(os.Stderr, "AEGIS_LOG_LEVEL: %v\n", err)
+	if lvl := os.Getenv("MACE_LOG_LEVEL"); lvl != "" {
+		if err := applyMaceLogLevelFromEnv(lvl); err != nil {
+			fmt.Fprintf(os.Stderr, "MACE_LOG_LEVEL: %v\n", err)
 		}
 	}
-	defer func() { _ = aegis.StopPipeline() }()
+	defer func() { _ = mace.StopPipeline() }()
 
 	rulesLabel, err := loadRulesForEngine()
 	if err != nil {
@@ -158,14 +158,14 @@ func main() {
 	}
 	fmt.Fprintf(os.Stderr, "Loaded rules from %s\n", rulesLabel)
 
-	if err := aegis.StartPipeline(); err != nil {
+	if err := mace.StartPipeline(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
-	fmt.Println("Aegis monitor running. Rules:", rulesLabel)
-	fmt.Println("Stdout labels (ALERT / EVENT / SUPPRESSED_*): from Client.Events() — not filtered by AEGIS_LOG_LEVEL.")
-	fmt.Println("Stderr [Aegis][LEVEL] lines: filtered by AEGIS_LOG_LEVEL — see docs/4-configuration/logging.md")
+	fmt.Println("Mace monitor running. Rules:", rulesLabel)
+	fmt.Println("Stdout labels (ALERT / EVENT / SUPPRESSED_*): from Client.Events() — not filtered by MACE_LOG_LEVEL.")
+	fmt.Println("Stderr [Mace][LEVEL] lines: filtered by MACE_LOG_LEVEL — see docs/4-configuration/logging.md")
 	fmt.Println("Try: whoami  |  python3 tests/simulations/attack_simulator.py  (from repo root)")
 	fmt.Println("Ctrl+C to exit.")
 

@@ -1,6 +1,6 @@
 # Environment setup
 
-This guide lists what you need on a **Linux** workstation to build and hack on Aegis-eBPF.
+This guide lists what you need on a **Linux** workstation to build and hack on Mace-eBPF.
 
 ## Operating system
 
@@ -12,7 +12,7 @@ This guide lists what you need on a **Linux** workstation to build and hack on A
 | Requirement | Notes |
 |-------------|--------|
 | **Stable Rust** | Workspace `edition = "2024"`; use current stable. |
-| **Nightly Rust** | With **`rust-src`** for `aegis-ebpf/build.rs` nested eBPF build (`-Z build-std`). |
+| **Nightly Rust** | With **`rust-src`** for `mace-ebpf/build.rs` nested eBPF build (`-Z build-std`). |
 | **`bpf-linker`** | `cargo install bpf-linker` (CI pins a version such as `0.10.3`). |
 
 Install toolchains (example):
@@ -35,13 +35,13 @@ sudo apt-get install -y \
 ## Go (optional, for `clients/go`)
 
 - **Go 1.21+**
-- **`CGO_ENABLED=1`** when building or testing **`aegis`** / **`aegis-agent`**
+- **`CGO_ENABLED=1`** when building or testing **`mace`** / **`mace-agent`**
 - **`gcc`** available on `PATH` (bookworm-derived CI images work well)
 
-## Python (optional, for `aegis-ebpf/python`)
+## Python (optional, for `mace-ebpf/python`)
 
 - Python **3.11+** recommended (matches CI)
-- **`libaegis_ebpf.so`** on the loader search path or **`LD_LIBRARY_PATH`**
+- **`libmace_ebpf.so`** on the loader search path or **`LD_LIBRARY_PATH`**
 
 ## BPF program loading caveats
 

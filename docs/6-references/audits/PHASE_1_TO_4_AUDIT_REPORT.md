@@ -1,4 +1,4 @@
-# Aegis-eBPF — Phases 1–4 Blueprint Audit Report
+# Mace-eBPF — Phases 1–4 Blueprint Audit Report
 
 **Document type:** Technical audit and traceability matrix  
 **Scope:** Repository state after Phase 4 (pre–Phase 5 pause)  
@@ -21,7 +21,7 @@ However, several blueprint **success criteria were stated in absolute or quantit
 | **2.3 LRU** | LRU map verification | **`scripts/vm/suites/step-2.3-toctou-lru.sh`** uses heuristics (`MemAvailable`, optional `bpftool`, dmesg grep); **does not assert per-entry eviction semantics** at the BPF API level. |
 | **3.1 Zero-copy** | Zero-copy boundary tests | FFI path **copies** `Event` into Rust (`TryPush` / C struct); **not zero-copy** in the strict sense; stress tests validate **safety**, not zero-copy. |
 | **4.2 Throughput** | “100,000+ events/sec” | **User-space** arena / JIT-storm path can exceed this (e.g. **~3.2M events/s** reported in Phase 4.1 work); **not** asserted as a hard CI threshold; ring-buffer **saturation** is tested in stress semantics, not a single canonical “events/sec” gate in Rust CI. |
-| **4.3 Latency** | “Overhead < 1000 ns per syscall” | **Not** the default gate: **`ebpf_overhead_bench.rs`** uses **multiplicative slowdown** vs baseline (default ≤ **3×**) because debug builds and eight tracepoints make sub-µs absolute deltas **unrealistic**; optional `AEGIS_MPROTECT_OVERHEAD_NS_MAX` for strict absolute checks (typically with **`cargo test --release`**). |
+| **4.3 Latency** | “Overhead < 1000 ns per syscall” | **Not** the default gate: **`ebpf_overhead_bench.rs`** uses **multiplicative slowdown** vs baseline (default ≤ **3×**) because debug builds and eight tracepoints make sub-µs absolute deltas **unrealistic**; optional `MACE_MPROTECT_OVERHEAD_NS_MAX` for strict absolute checks (typically with **`cargo test --release`**). |
 
 **Bottom line:** The project is **engineering-complete** for Phases 1–4 in the sense of **breadth** (tests and tooling exist for nearly every step). Gaps are mainly **evidence rigor** (coverage numbers, absolute latency, strict zero-copy, LRU formalism) and **CI enforcement** (ignored eBPF tests, Vagrant off by default).
 
@@ -35,10 +35,10 @@ However, several blueprint **success criteria were stated in absolute or quantit
 
 | Artifact | Role |
 |----------|------|
-| `aegis-ebpf-common/src/lib.rs` | Unit tests: `MemorySyscall`, `EventType`, `KernelMemoryEvent::from_bytes`, `MemoryEvent::from_bytes`, golden-byte helpers. |
-| `aegis-ebpf/src/lib.rs` | Tests for `parse_os_release_field`, `btfhub_arch`. |
-| `aegis-ebpf/src/**/*.rs` (multiple `#[cfg(test)]` modules) | Domain tests: `ffi/` (arena, alert channel, handle, types, jit_storm), `state/`, `rules/`, `pipeline/`, `alert`, `enrichment`, `proto`, `observability/metrics`, etc. |
-| `aegis-ebpf/tests/observability_integration.rs` | Prometheus scrape integration (`--features prometheus`). |
+| `mace-ebpf-common/src/lib.rs` | Unit tests: `MemorySyscall`, `EventType`, `KernelMemoryEvent::from_bytes`, `MemoryEvent::from_bytes`, golden-byte helpers. |
+| `mace-ebpf/src/lib.rs` | Tests for `parse_os_release_field`, `btfhub_arch`. |
+| `mace-ebpf/src/**/*.rs` (multiple `#[cfg(test)]` modules) | Domain tests: `ffi/` (arena, alert channel, handle, types, jit_storm), `state/`, `rules/`, `pipeline/`, `alert`, `enrichment`, `proto`, `observability/metrics`, etc. |
+| `mace-ebpf/tests/observability_integration.rs` | Prometheus scrape integration (`--features prometheus`). |
 
 **Gap:** No workspace-level **coverage threshold** (90%) or report artifact; “>90%” is **not verifiable** from the repo alone.
 
@@ -48,10 +48,10 @@ However, several blueprint **success criteria were stated in absolute or quantit
 
 | Artifact | Role |
 |----------|------|
-| `run_memory_checks.sh` | Automates nightly **Miri** on `ffi` + `arena` tests and **ASAN** (`-Z sanitizer=address`) on `aegis-ebpf --lib`. |
+| `run_memory_checks.sh` | Automates nightly **Miri** on `ffi` + `arena` tests and **ASAN** (`-Z sanitizer=address`) on `mace-ebpf --lib`. |
 | `.cargo/linux-test-runner.sh` + `.cargo/config.toml` | Conditional runner: `sudo` vs Miri runner to avoid conflicts. |
-| `aegis-ebpf/build.rs` | Skips/adapts eBPF build under Miri/ASAN to avoid incompatible build paths. |
-| `aegis-ebpf/src/ffi/arena.rs` | `UnsafeCell` in ring buffer slots to satisfy Miri Stacked Borrows for concurrent tests. |
+| `mace-ebpf/build.rs` | Skips/adapts eBPF build under Miri/ASAN to avoid incompatible build paths. |
+| `mace-ebpf/src/ffi/arena.rs` | `UnsafeCell` in ring buffer slots to satisfy Miri Stacked Borrows for concurrent tests. |
 
 **Strength:** Practical automation for high-risk FFI/arena code.  
 **Gap:** “Zero UB” for the **entire** crate/workspace is **not** claimed by Miri scope; eBPF object code and all `unsafe` blocks are not uniformly under Miri.
@@ -62,8 +62,8 @@ However, several blueprint **success criteria were stated in absolute or quantit
 
 | Artifact | Role |
 |----------|------|
-| `aegis-ebpf/benches/arena_benchmark.rs` | Criterion: `try_push` / `try_pop` (non-full, full, non-empty, empty) and **concurrent** SPSC `10_000` round-trips (`spsc_scope_10k_roundtrip`). |
-| `aegis-ebpf/Cargo.toml` | `[[bench]] name = "arena_benchmark"` + `criterion` dev-dependency. |
+| `mace-ebpf/benches/arena_benchmark.rs` | Criterion: `try_push` / `try_pop` (non-full, full, non-empty, empty) and **concurrent** SPSC `10_000` round-trips (`spsc_scope_10k_roundtrip`). |
+| `mace-ebpf/Cargo.toml` | `[[bench]] name = "arena_benchmark"` + `criterion` dev-dependency. |
 
 **Proof style:** Microbenchmark **throughput** and stable hot-path timing; industry-standard substitute for formal Big-O proofs.  
 **Gap:** No automated regression bound on ns/op in CI; O(1) is **interpretive**, not mathematically certified.
@@ -76,11 +76,11 @@ However, several blueprint **success criteria were stated in absolute or quantit
 
 | Artifact | Role |
 |----------|------|
-| `aegis-ebpf/tests/verifier_load_test.rs` | Load prebuilt object; verifier log; ensure expected tracepoint programs exist (`#[ignore]`). |
-| `aegis-ebpf/tests/tracepoint_attach_test.rs` | Attach tracepoints, trigger `mprotect`, read `EVENTS` ring buffer (`#[ignore]`). |
-| `aegis-ebpf/tests/common/mod.rs` | Root check, memlock rlimit, resolve newest `aegis-ebpf` ELF under `target/` or `AEGIS_EBPF_OBJECT`. |
-| `aegis-ebpf-loader/` | Minimal loader + **`--daemon`** for long-running attach scenarios. |
-| `aegis-ebpf-ebpf/src/main.rs` | Explicit `#[tracepoint(category = "syscalls", name = "...")]` per syscall. |
+| `mace-ebpf/tests/verifier_load_test.rs` | Load prebuilt object; verifier log; ensure expected tracepoint programs exist (`#[ignore]`). |
+| `mace-ebpf/tests/tracepoint_attach_test.rs` | Attach tracepoints, trigger `mprotect`, read `EVENTS` ring buffer (`#[ignore]`). |
+| `mace-ebpf/tests/common/mod.rs` | Root check, memlock rlimit, resolve newest `mace-ebpf` ELF under `target/` or `MACE_EBPF_OBJECT`. |
+| `mace-ebpf-loader/` | Minimal loader + **`--daemon`** for long-running attach scenarios. |
+| `mace-ebpf-ebpf/src/main.rs` | Explicit `#[tracepoint(category = "syscalls", name = "...")]` per syscall. |
 
 **Gap:** Tests are **`#[ignore]`** by design (Firecracker / restricted BPF); **default `cargo test` does not execute** kernel proof on typical CI.
 
@@ -91,7 +91,7 @@ However, several blueprint **success criteria were stated in absolute or quantit
 | Artifact | Role |
 |----------|------|
 | `Vagrantfile` | Matrix VMs (`k510`, `k515`, `k61`, `k66`) with documented kernel *intent*. |
-| `scripts/vm/prepare-artifact.sh` | Host build + copy **prebuilt** `aegis-ebpf` + `aegis-ebpf-loader` into `scripts/vm/artifacts/`. |
+| `scripts/vm/prepare-artifact.sh` | Host build + copy **prebuilt** `mace-ebpf` + `mace-ebpf-loader` into `scripts/vm/artifacts/`. |
 | `scripts/vm/run-test.sh`, `scripts/vm/run-matrix.sh`, `scripts/vm/provision-*.sh` | Provision and run tests in guests. |
 | `scripts/vm/README-kernel-matrix.md` | Operator documentation. |
 
@@ -105,7 +105,7 @@ However, several blueprint **success criteria were stated in absolute or quantit
 | Artifact | Role |
 |----------|------|
 | `scripts/vm/suites/step-2.3-toctou-lru.sh` | Daemon loader + many short-lived children + `MemAvailable` / optional `bpftool map` / dmesg heuristics. |
-| `aegis-ebpf-ebpf/src/main.rs` | `pending_syscalls`: `LruHashMap`, ring buffer reserve failure logging. |
+| `mace-ebpf-ebpf/src/main.rs` | `pending_syscalls`: `LruHashMap`, ring buffer reserve failure logging. |
 
 **Strength:** Stresses realistic adversarial fork/mmap churn with BPF attached.  
 **Gaps:** Pass/fail is **heuristic**; `bpftool` optional by default; **no direct test** that a specific insert evicted a specific key; **not** run in plain `cargo test`.
@@ -118,9 +118,9 @@ However, several blueprint **success criteria were stated in absolute or quantit
 
 | Artifact | Role |
 |----------|------|
-| `aegis-ebpf/pkg/aegis/arena_handle.go`, `alert_handle.go`, `sensor.go` | cgo wrappers, mutex + finalizers. |
-| `aegis-ebpf/pkg/aegis/arena_gc_test.go` | `TestCGOBoundaryAndGCStress` (10k arena cycles + `TryPush`), `TestAlertChannelHandleGCStress`. |
-| `aegis-ebpf/python/aegis/*.py`, `python/tests/test_bindings.py` | ctypes lifecycle, push/pop, GC stress (`test_gc_del_stress_*`). |
+| `mace-ebpf/pkg/mace/arena_handle.go`, `alert_handle.go`, `sensor.go` | cgo wrappers, mutex + finalizers. |
+| `mace-ebpf/pkg/mace/arena_gc_test.go` | `TestCGOBoundaryAndGCStress` (10k arena cycles + `TryPush`), `TestAlertChannelHandleGCStress`. |
+| `mace-ebpf/python/mace/*.py`, `python/tests/test_bindings.py` | ctypes lifecycle, push/pop, GC stress (`test_gc_del_stress_*`). |
 
 **Gap vs blueprint wording:** Bindings **marshal** structs across the boundary; this is **not** a zero-copy shared-memory API. Success is better described as **“no UAF/double-free under aggressive client + GC”** than zero-copy.
 
@@ -130,10 +130,10 @@ However, several blueprint **success criteria were stated in absolute or quantit
 
 | Artifact | Role |
 |----------|------|
-| `aegis-ebpf/pkg/aegis/arena_gc_test.go` | Go `runtime.GC()` interleaved with FFI. |
-| `aegis-ebpf/pkg/aegis/throughput_stress_test.go` | Concurrent drain goroutine + Rust-side storm (contention). |
-| `aegis-ebpf/python/tests/test_bindings.py` | GC stress for `Arena` / `AlertChannel`. |
-| `aegis-ebpf/python/aegis/arena.py`, `alert.py` | Defensive `close` / `__del__` patterns. |
+| `mace-ebpf/pkg/mace/arena_gc_test.go` | Go `runtime.GC()` interleaved with FFI. |
+| `mace-ebpf/pkg/mace/throughput_stress_test.go` | Concurrent drain goroutine + Rust-side storm (contention). |
+| `mace-ebpf/python/tests/test_bindings.py` | GC stress for `Arena` / `AlertChannel`. |
+| `mace-ebpf/python/mace/arena.py`, `alert.py` | Defensive `close` / `__del__` patterns. |
 
 **Assessment:** **Well covered** for Go and Python; C client tests are not a first-class duplicate (Rust is the primary “C” ABI).
 
@@ -143,9 +143,9 @@ However, several blueprint **success criteria were stated in absolute or quantit
 
 | Artifact | Role |
 |----------|------|
-| `aegis-ebpf/pkg/aegis/alert_integrity_test.go` | `FeedTestAlert` from Rust FFI → `TryRecvNonBlocking` → `proto.Unmarshal` → field-level asserts. |
-| `aegis-ebpf/src/ffi/alert_channel.rs` | `inject_test_proto` / `aegis_alert_channel_feed_test_alert` (test hook + safety docs). |
-| `aegis-ebpf/include/aegis.h` | Generated declarations (via `build.rs`). |
+| `mace-ebpf/pkg/mace/alert_integrity_test.go` | `FeedTestAlert` from Rust FFI → `TryRecvNonBlocking` → `proto.Unmarshal` → field-level asserts. |
+| `mace-ebpf/src/ffi/alert_channel.rs` | `inject_test_proto` / `mace_alert_channel_feed_test_alert` (test hook + safety docs). |
+| `mace-ebpf/include/mace.h` | Generated declarations (via `build.rs`). |
 
 **Gap:** **Python** bindings tests cover lifecycle and basic recv; **no** parallel “maximal alert” protobuf integrity test in `python/tests/` comparable to Go.
 
@@ -157,8 +157,8 @@ However, several blueprint **success criteria were stated in absolute or quantit
 
 | Artifact | Role |
 |----------|------|
-| `aegis-ebpf/tests/ebpf_syscall_stress_test.rs` | Concurrent `mprotect` storm + ring buffer drain; documents **100 ms TGID rate limit** in eBPF; logs implied drop % vs successful syscalls. |
-| `aegis-ebpf-ebpf/src/main.rs` | `RATE_LIMIT_INTERVAL_NS`, `RATE_LIMIT_*` maps, conditional emit on `PROT_EXEC`. |
+| `mace-ebpf/tests/ebpf_syscall_stress_test.rs` | Concurrent `mprotect` storm + ring buffer drain; documents **100 ms TGID rate limit** in eBPF; logs implied drop % vs successful syscalls. |
+| `mace-ebpf-ebpf/src/main.rs` | `RATE_LIMIT_INTERVAL_NS`, `RATE_LIMIT_*` maps, conditional emit on `PROT_EXEC`. |
 
 **Assessment:** **Aligned** with “survival” and rate-limit semantics; does not assert equality of syscall count vs events (correct given program logic).
 
@@ -168,10 +168,10 @@ However, several blueprint **success criteria were stated in absolute or quantit
 
 | Artifact | Role |
 |----------|------|
-| `aegis-ebpf/src/ffi/jit_storm.rs` | `aegis_simulate_jit_storm` — scoped producer/consumer into `EventArena`. |
-| `aegis-ebpf/pkg/aegis/arena_handle.go` | `SimulateJitStorm` / `SimulateJitStormDuration` (deadlock fix: release lock before FFI). |
-| `aegis-ebpf/pkg/aegis/throughput_stress_test.go` | 100k storm + optional concurrent Go `TryPop`; logs events/s. |
-| `aegis-ebpf/python/aegis/_ffi.py` | ctypes bindings for storm API. |
+| `mace-ebpf/src/ffi/jit_storm.rs` | `mace_simulate_jit_storm` — scoped producer/consumer into `EventArena`. |
+| `mace-ebpf/pkg/mace/arena_handle.go` | `SimulateJitStorm` / `SimulateJitStormDuration` (deadlock fix: release lock before FFI). |
+| `mace-ebpf/pkg/mace/throughput_stress_test.go` | 100k storm + optional concurrent Go `TryPop`; logs events/s. |
+| `mace-ebpf/python/mace/_ffi.py` | ctypes bindings for storm API. |
 
 **Reported numbers (from project narrative / local runs, not CI-enforced):** User-space path on the order of **millions of events/sec** (e.g. **~3.2M events/s**) for the Rust-driven JIT storm through the arena; **kernel** ring buffer throughput is a **different** dimension (rate-limited + smaller map).
 
@@ -183,7 +183,7 @@ However, several blueprint **success criteria were stated in absolute or quantit
 
 | Artifact | Role |
 |----------|------|
-| `aegis-ebpf/tests/ebpf_overhead_bench.rs` | Baseline vs attached: **100k** RWX→RW cycles; logs avg ns/syscall, overhead, slowdown factor; default gate **`ebpf/baseline ≤ 3.0`** (`AEGIS_MPROTECT_SLOWDOWN_MAX`); optional **`AEGIS_MPROTECT_OVERHEAD_NS_MAX`** for absolute ns/syscall when set. |
+| `mace-ebpf/tests/ebpf_overhead_bench.rs` | Baseline vs attached: **100k** RWX→RW cycles; logs avg ns/syscall, overhead, slowdown factor; default gate **`ebpf/baseline ≤ 3.0`** (`MACE_MPROTECT_SLOWDOWN_MAX`); optional **`MACE_MPROTECT_OVERHEAD_NS_MAX`** for absolute ns/syscall when set. |
 
 **Gap vs original blueprint text:** Default is **not** “< 1000 ns extra per syscall”; that proved **infeasible** on typical debug + multi-tracepoint setups. The implementation **documents** `--release` and optional absolute caps for strict environments.
 
@@ -193,9 +193,9 @@ However, several blueprint **success criteria were stated in absolute or quantit
 
 | Criterion (as implemented) | Evidence |
 |-----------------------------|----------|
-| Unit tests for shared types & parsing | `aegis-ebpf-common` tests; `MemoryEvent::from_bytes` mapping tests. |
+| Unit tests for shared types & parsing | `mace-ebpf-common` tests; `MemoryEvent::from_bytes` mapping tests. |
 | Miri + ASAN for FFI/arena | `run_memory_checks.sh`; targeted `cargo +nightly miri test` modules. |
-| Arena hot-path benchmarks | `cargo bench -p aegis-ebpf --bench arena_benchmark` (Criterion groups `single_thread_push_pop`, `concurrent_push_pop`). |
+| Arena hot-path benchmarks | `cargo bench -p mace-ebpf --bench arena_benchmark` (Criterion groups `single_thread_push_pop`, `concurrent_push_pop`). |
 | eBPF load / attach / ringbuf | Ignored integration tests + loader daemon for suites. |
 | Multi-kernel smoke | Vagrant matrix + artifact copy workflow. |
 | LRU / TOCTOU stress | `step-2.3-toctou-lru.sh` under VM harness. |
@@ -216,7 +216,7 @@ However, several blueprint **success criteria were stated in absolute or quantit
 4. **Blueprint wording vs design:** Replace “zero-copy” with **“copy-safe FFI”** or document any future **true** zero-copy ring (shared mmap) separately.
 5. **Python protobuf parity:** Add a **Rust-fed maximal alert** test mirroring Go’s `TestProtobufAlertIntegrity`.
 6. **Phase 4.2 vs 4.3 separation:** Keep **userspace throughput** (JIT storm) and **kernel syscall overhead** (overhead bench) clearly labeled in docs to avoid comparing incompatible numbers.
-7. **Overhead benchmark:** Treat **slowdown ratio** as the portable default; use **`--release` + `AEGIS_MPROTECT_OVERHEAD_NS_MAX`** only where sub-µs absolute SLAs are real for your deployment kernel and attachment set.
+7. **Overhead benchmark:** Treat **slowdown ratio** as the portable default; use **`--release` + `MACE_MPROTECT_OVERHEAD_NS_MAX`** only where sub-µs absolute SLAs are real for your deployment kernel and attachment set.
 
 ---
 
@@ -224,16 +224,16 @@ However, several blueprint **success criteria were stated in absolute or quantit
 
 | Path | Phase / step |
 |------|----------------|
-| `aegis-ebpf-common/src/lib.rs` | 1.1 |
+| `mace-ebpf-common/src/lib.rs` | 1.1 |
 | `run_memory_checks.sh`, `.cargo/linux-test-runner.sh` | 1.2 |
-| `aegis-ebpf/benches/arena_benchmark.rs` | 1.3 |
-| `aegis-ebpf/tests/verifier_load_test.rs`, `tracepoint_attach_test.rs` | 2.1 |
+| `mace-ebpf/benches/arena_benchmark.rs` | 1.3 |
+| `mace-ebpf/tests/verifier_load_test.rs`, `tracepoint_attach_test.rs` | 2.1 |
 | `Vagrantfile`, `scripts/vm/*` | 2.2, 2.3 |
-| `aegis-ebpf/pkg/aegis/*.go`, `*_test.go` | 3.x |
-| `aegis-ebpf/python/` | 3.x |
-| `aegis-ebpf/tests/ebpf_syscall_stress_test.rs` | 4.1 |
-| `aegis-ebpf/src/ffi/jit_storm.rs`, `pkg/aegis/throughput_stress_test.go` | 4.2 |
-| `aegis-ebpf/tests/ebpf_overhead_bench.rs` | 4.3 |
+| `mace-ebpf/pkg/mace/*.go`, `*_test.go` | 3.x |
+| `mace-ebpf/python/` | 3.x |
+| `mace-ebpf/tests/ebpf_syscall_stress_test.rs` | 4.1 |
+| `mace-ebpf/src/ffi/jit_storm.rs`, `pkg/mace/throughput_stress_test.go` | 4.2 |
+| `mace-ebpf/tests/ebpf_overhead_bench.rs` | 4.3 |
 
 ---
 

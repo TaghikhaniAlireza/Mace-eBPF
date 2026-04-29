@@ -1,6 +1,6 @@
 # Quick start: container image
 
-Run the pre-built **aegis-agent** from GitHub Container Registry (GHCR) without compiling from source.
+Run the pre-built **mace-agent** from GitHub Container Registry (GHCR) without compiling from source.
 
 ## Prerequisites
 
@@ -10,25 +10,25 @@ Run the pre-built **aegis-agent** from GitHub Container Registry (GHCR) without 
 
 ## One command
 
-For a **five-minute trial** without installing a `.deb`, use the container (see [Audiences: who uses Aegis](./audiences.md) for roles and alternatives).
+For a **five-minute trial** without installing a `.deb`, use the container (see [Audiences: who uses Mace](./audiences.md) for roles and alternatives).
 
 GHCR image path (**GitHub owner must be lowercase**):
 
 ```bash
 docker run --rm -it --privileged \
-  ghcr.io/taghikhanialireza/aegis-ebpf:latest
+  ghcr.io/taghikhanialireza/mace-ebpf:latest
 ```
 
-The container entrypoint is **`aegis-agent`** with default args **`--config /etc/aegis/config.yaml`**.
+The container entrypoint is **`mace-agent`** with default args **`--config /etc/mace/config.yaml`**.
 
 ## What is inside the image
 
 | Path | Purpose |
 |------|---------|
-| `/usr/bin/aegis-agent` | Standalone agent (Go + statically linked Rust core). |
-| `/etc/aegis/config.yaml` | Logging path + format + rules path. |
-| `/etc/aegis/rules.yaml` | Default placeholder rules (customize or mount your own). |
-| `/opt/aegis/bpf/aegis-ebpf` | CO-RE eBPF object on disk (the library also embeds a copy at build time). |
+| `/usr/bin/mace-agent` | Standalone agent (Go + statically linked Rust core). |
+| `/etc/mace/config.yaml` | Logging path + format + rules path. |
+| `/etc/mace/rules.yaml` | Default placeholder rules (customize or mount your own). |
+| `/opt/mace/bpf/mace-ebpf` | CO-RE eBPF object on disk (the library also embeds a copy at build time). |
 
 ## Minimal configuration (optional override)
 
@@ -36,35 +36,35 @@ Mount your own config instead of the baked-in defaults:
 
 ```bash
 docker run --rm -it --privileged \
-  -v "$(pwd)/my-config.yaml:/etc/aegis/config.yaml:ro" \
-  -v "$(pwd)/my-rules.yaml:/etc/aegis/rules.yaml:ro" \
-  ghcr.io/taghikhanialireza/aegis-ebpf:latest
+  -v "$(pwd)/my-config.yaml:/etc/mace/config.yaml:ro" \
+  -v "$(pwd)/my-rules.yaml:/etc/mace/rules.yaml:ro" \
+  ghcr.io/taghikhanialireza/mace-ebpf:latest
 ```
 
 Example `my-config.yaml`:
 
 ```yaml
 logging:
-  path: /var/log/aegis/events.log
+  path: /var/log/mace/events.log
   format: json
 
 rules:
-  path: /etc/aegis/rules.yaml
+  path: /etc/mace/rules.yaml
 ```
 
 Security events are written **only** to `logging.path` inside the container filesystem unless you mount a host directory there, for example:
 
 ```bash
-mkdir -p ./aegis-logs
+mkdir -p ./mace-logs
 docker run --rm -it --privileged \
-  -v "$(pwd)/aegis-logs:/var/log/aegis" \
-  ghcr.io/taghikhanialireza/aegis-ebpf:latest
+  -v "$(pwd)/mace-logs:/var/log/mace" \
+  ghcr.io/taghikhanialireza/mace-ebpf:latest
 ```
 
 Then inspect events:
 
 ```bash
-tail -f ./aegis-logs/events.log
+tail -f ./mace-logs/events.log
 ```
 
 ## Expected output
@@ -72,8 +72,8 @@ tail -f ./aegis-logs/events.log
 On **stderr** you should see agent lifecycle lines, for example:
 
 ```text
-aegis-agent: logging security events to /var/log/aegis/events.log (format=json)
-aegis-agent: engine running (rules="/etc/aegis/rules.yaml"); send SIGTERM or SIGINT to stop
+mace-agent: logging security events to /var/log/mace/events.log (format=json)
+mace-agent: engine running (rules="/etc/mace/rules.yaml"); send SIGTERM or SIGINT to stop
 ```
 
 If the kernel or environment cannot load BPF programs, **`StartPipeline`** fails and the process exits with an error (common on some microVMs or locked-down hosts).

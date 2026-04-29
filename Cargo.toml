@@ -1,12 +1,12 @@
 [workspace]
 resolver = "2"
 members = [
-    "aegis-ebpf",
-    "aegis-ebpf-common",
-    "aegis-ebpf-ebpf",
-    "aegis-ebpf-loader",
+    "mace-ebpf",
+    "mace-ebpf-common",
+    "mace-ebpf-ebpf",
+    "mace-ebpf-loader",
 ]
-default-members = ["aegis-ebpf", "aegis-ebpf-common"]
+default-members = ["mace-ebpf", "mace-ebpf-common"]
 
 [workspace.package]
 license = "MIT OR Apache-2.0"
@@ -31,6 +31,6 @@ log = { version = "0.4.22", default-features = false }
 tokio = { version = "1.40.0", default-features = false }
 which = { version = "6.0.0", default-features = false }
 
-[profile.release.package.aegis-ebpf-ebpf]
+[profile.release.package.mace-ebpf-ebpf]
 debug = 2
 codegen-units = 1

@@ -7,10 +7,10 @@ This document covers building the **Rust** workspace (including the eBPF object)
 | Component | Requirement |
 |-----------|-------------|
 | **Rust stable** | Workspace `edition = "2024"`; use a current stable toolchain. |
-| **Rust nightly** | **`rust-src`** component for `aegis-ebpf/build.rs` nested eBPF build (`-Z build-std`). |
+| **Rust nightly** | **`rust-src`** component for `mace-ebpf/build.rs` nested eBPF build (`-Z build-std`). |
 | **`bpf-linker`** | `cargo install bpf-linker` (pinned in CI, e.g. `0.10.3`). |
 | **System packages** (Debian/Ubuntu) | `clang`, `llvm`, `libelf-dev`, `zlib1g-dev`, `pkg-config`, `build-essential`, `protobuf-compiler`, kernel headers matching the build host where applicable. |
-| **Go** | **1.21+** for `clients/go` (module `github.com/aegis-ebpf/sdk/clients/go`). |
+| **Go** | **1.21+** for `clients/go` (module `github.com/mace-ebpf/sdk/clients/go`). |
 
 See **[AGENTS.md](../../AGENTS.md)** for contributor-focused notes and Cloud VM BPF limitations.
 
@@ -22,23 +22,23 @@ From the repository root:
 cargo build --release
 ```
 
-This builds **`aegis-ebpf`** (userspace) and, via **`aegis-ebpf/build.rs`**, the **`aegis-ebpf-ebpf`** BPF object for the `bpfel-unknown-none` target.
+This builds **`mace-ebpf`** (userspace) and, via **`mace-ebpf/build.rs`**, the **`mace-ebpf-ebpf`** BPF object for the `bpfel-unknown-none` target.
 
 Artifacts of interest:
 
 | Output | Location |
 |--------|----------|
-| Static + shared Rust FFI | `target/release/libaegis_ebpf.a`, `target/release/libaegis_ebpf.so` |
-| C header | `aegis-ebpf/include/aegis.h` |
-| eBPF object (embedded + under `target/.../out/`) | Used at runtime via `include_bytes_aligned!` in `aegis-ebpf/src/lib.rs` |
+| Static + shared Rust FFI | `target/release/libmace_ebpf.a`, `target/release/libmace_ebpf.so` |
+| C header | `mace-ebpf/include/mace.h` |
+| eBPF object (embedded + under `target/.../out/`) | Used at runtime via `include_bytes_aligned!` in `mace-ebpf/src/lib.rs` |
 
-## Go agent (`aegis-agent`)
+## Go agent (`mace-agent`)
 
-**Debug** Rust + **debug** static library (default CGO paths in `clients/go/aegis/aegis.go`):
+**Debug** Rust + **debug** static library (default CGO paths in `clients/go/mace/mace.go`):
 
 ```bash
 make build-agent
-# binary: ./build/aegis-agent
+# binary: ./build/mace-agent
 ```
 
 **Release** Rust + **release** static library (required for production and for `make pack-deb`):
@@ -47,7 +47,7 @@ make build-agent
 make build-agent-release
 ```
 
-This runs `go build -tags aegis_static_release` so the linker picks **`target/release/libaegis_ebpf.a`**.
+This runs `go build -tags mace_static_release` so the linker picks **`target/release/libmace_ebpf.a`**.
 
 Environment:
 
@@ -72,7 +72,7 @@ Multi-stage **`Dockerfile`** at the repository root builds Rust (release), then 
 
 ```bash
 cargo check
-cargo test -p aegis-ebpf --lib
+cargo test -p mace-ebpf --lib
 cargo clippy --all-targets --all-features -- -D warnings
 cargo +nightly fmt --check
 ```

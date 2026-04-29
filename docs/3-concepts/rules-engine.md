@@ -1,6 +1,6 @@
 # Rules engine
 
-This document describes the YAML rule format consumed by the userspace rule engine in **`aegis-ebpf`** (`aegis-ebpf/src/rules/`). Rules filter **enriched** memory and syscall events produced by the eBPF sensor and pipeline.
+This document describes the YAML rule format consumed by the userspace rule engine in **`mace-ebpf`** (`mace-ebpf/src/rules/`). Rules filter **enriched** memory and syscall events produced by the eBPF sensor and pipeline.
 
 ## File organization: one file vs directory
 
@@ -12,18 +12,18 @@ This document describes the YAML rule format consumed by the userspace rule engi
 
 Rules are validated at load time (syntax, syscall names, regex fields, cross-field constraints).
 
-**Rust SDK:** build a `RuleSet` (`aegis-ebpf/src/rules/loader.rs`) from a string (`from_yaml_str`), a single file (`from_file`), or a directory of `.yaml`/`.yml` files merged in sorted order (`from_dir`).
+**Rust SDK:** build a `RuleSet` (`mace-ebpf/src/rules/loader.rs`) from a string (`from_yaml_str`), a single file (`from_file`), or a directory of `.yaml`/`.yml` files merged in sorted order (`from_dir`).
 
 **Embedded / FFI:**
 
-- Inline YAML: **`aegis_load_rules`**.
-- Filesystem path (with optional hot reload when wired through the pipeline): **`aegis_load_rules_file`**.
+- Inline YAML: **`mace_load_rules`**.
+- Filesystem path (with optional hot reload when wired through the pipeline): **`mace_load_rules_file`**.
 
-**Go example** (`clients/go/examples`): resolves **`AEGIS_RULES_FILE`**, then **`/etc/aegis/rules.yaml`** if present, otherwise the repository **`tests/simulations/rules.yaml`**.
+**Go example** (`clients/go/examples`): resolves **`MACE_RULES_FILE`**, then **`/etc/mace/rules.yaml`** if present, otherwise the repository **`tests/simulations/rules.yaml`**.
 
 There is no built-in search path list in the core library; embedders choose defaults (CLI flags, environment variables, `/etc`, and so on).
 
-**Aegis stderr filter:** see [Core logging](../4-configuration/logging.md) — how `AEGIS_LOG_LEVEL` differs from stdout labels in the Go example and from `RUST_LOG`.
+**Mace stderr filter:** see [Core logging](../4-configuration/logging.md) — how `MACE_LOG_LEVEL` differs from stdout labels in the Go example and from `RUST_LOG`.
 
 ## Suppression (trusted processes / false-positive control)
 
@@ -120,7 +120,7 @@ stateful:
   min_rwx_bytes: 4096
 ```
 
-If present, the rule only matches when the associated process state counters meet the thresholds (`ProcessState` in **`aegis-ebpf/src/state/`**). Evaluators pass state when available (pipeline integration).
+If present, the rule only matches when the associated process state counters meet the thresholds (`ProcessState` in **`mace-ebpf/src/state/`**). Evaluators pass state when available (pipeline integration).
 
 ## Complete examples
 

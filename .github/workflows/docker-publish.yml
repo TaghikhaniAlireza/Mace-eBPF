@@ -2,7 +2,7 @@
 # Publish OCI images to GHCR (linux/amd64 + linux/arm64), sign with Cosign (keyless).
 # =============================================================================
 # Triggers: push to main, version tags v*
-# Image:    ghcr.io/<owner-lowercase>/aegis-ebpf:<tag>
+# Image:    ghcr.io/<owner-lowercase>/mace-ebpf:<tag>
 # Requires: packages: write, id-token: write (OIDC for keyless cosign)
 # =============================================================================
 
@@ -19,10 +19,10 @@ on:
       - ".dockerignore"
       - "Cargo.toml"
       - "Cargo.lock"
-      - "aegis-ebpf/**"
-      - "aegis-ebpf-common/**"
-      - "aegis-ebpf-ebpf/**"
-      - "aegis-ebpf-loader/**"
+      - "mace-ebpf/**"
+      - "mace-ebpf-common/**"
+      - "mace-ebpf-ebpf/**"
+      - "mace-ebpf-loader/**"
       - "clients/go/**"
       - "packaging/**"
 
@@ -37,7 +37,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: aegis-ebpf
+  IMAGE_NAME: mace-ebpf
 
 jobs:
   build-push-sign:

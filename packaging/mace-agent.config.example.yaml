@@ -1,0 +1,10 @@
+# Example configuration for mace-agent (copy to /etc/mace/config.yaml).
+#
+# Security events are written only to logging.path in the chosen format.
+
+logging:
+  path: /var/log/mace/events.log
+  format: json   # json | text
+
+rules:
+  path: /etc/mace/rules.yaml

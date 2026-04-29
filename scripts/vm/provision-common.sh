@@ -16,6 +16,6 @@ if command -v apt-get >/dev/null 2>&1; then
     || true
 fi
 
-echo "[provision-common] VM=${AEGIS_VM_NAME:-unknown}"
-echo "[provision-common] ${AEGIS_KERNEL_NOTE:-}"
+echo "[provision-common] VM=${MACE_VM_NAME:-unknown}"
+echo "[provision-common] ${MACE_KERNEL_NOTE:-}"
 uname -a

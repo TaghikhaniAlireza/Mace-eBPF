@@ -2,13 +2,13 @@
 """Parse Criterion text output and fail if medians exceed ceilings (CI regression gate).
 
 Usage:
-  cargo bench -p aegis-ebpf --bench arena_benchmark --bench rule_engine_bench -- --noplot 2>&1 \\
+  cargo bench -p mace-ebpf --bench arena_benchmark --bench rule_engine_bench -- --noplot 2>&1 \\
     | python3 scripts/ci/criterion_gate.py
 
 Env (optional overrides, nanoseconds):
-  AEGIS_BENCH_MAX_RULE_ENGINE_NS   default 18000  (256-rule mmap evaluate median; CI runners vary)
-  AEGIS_BENCH_MAX_STATE_TRACKER_NS default 220    (single-tgid update median)
-  AEGIS_BENCH_MAX_ARENA_PUSH_NS    default 180    (try_push_non_full median)
+  MACE_BENCH_MAX_RULE_ENGINE_NS   default 18000  (256-rule mmap evaluate median; CI runners vary)
+  MACE_BENCH_MAX_STATE_TRACKER_NS default 220    (single-tgid update median)
+  MACE_BENCH_MAX_ARENA_PUSH_NS    default 180    (try_push_non_full median)
 """
 from __future__ import annotations
 
@@ -32,9 +32,9 @@ def to_ns(value: float, unit: str) -> float:
 
 
 def main() -> int:
-    max_rule = float(os.environ.get("AEGIS_BENCH_MAX_RULE_ENGINE_NS", "18000"))
-    max_state = float(os.environ.get("AEGIS_BENCH_MAX_STATE_TRACKER_NS", "220"))
-    max_arena = float(os.environ.get("AEGIS_BENCH_MAX_ARENA_PUSH_NS", "180"))
+    max_rule = float(os.environ.get("MACE_BENCH_MAX_RULE_ENGINE_NS", "18000"))
+    max_state = float(os.environ.get("MACE_BENCH_MAX_STATE_TRACKER_NS", "220"))
+    max_arena = float(os.environ.get("MACE_BENCH_MAX_ARENA_PUSH_NS", "180"))
 
     text = sys.stdin.read()
     lines = text.splitlines()
