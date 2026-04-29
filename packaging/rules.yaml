@@ -1,15 +1,45 @@
 # Default rules shipped with mace-agent (placeholder — customize for your environment).
 #
-# See docs/3-concepts/rules-engine.md in the upstream repository for the full schema.
+# See docs/3-concepts/rules-engine.md for the full schema.
+#
+# Optional rule metadata (for SIEM / MITRE mapping — all lists default to empty if omitted):
+#   tags, mitre_tactics, mitre_techniques, references
+#
+# Optional conditions (must pair with the right syscall — see docs):
+#   target_process_pattern  → syscall: ptrace  (matches target task /proc/<tid>/comm)
+#   memfd_name_pattern      → syscall: memfd_create
+#   env_contains            → syscall: execve  (substrings in /proc/<pid>/environ)
+#
+# Alerts channel (protobuf Alert): top-level fields are unchanged; threat-intel metadata is
+# included inside context_json as JSON keys: tags, mitre_tactics, mitre_techniques, references
+# (alongside rule_id, pid, syscall_id, matched_flags, namespace, pod_name).
 
 rules:
   - id: "PLACEHOLDER_EXECVE_WHOAMI"
     name: "Example: execve argv contains whoami"
     severity: "low"
     description: "Replace or extend this file with fleet-specific detection and suppressions."
+    tags: ["example", "recon"]
+    mitre_tactics: ["Discovery"]
+    mitre_techniques: ["T1033"]
+    references: ["https://attack.mitre.org/techniques/T1033/"]
     conditions:
       syscall: "execve"
       argv_contains:
         - "whoami"
+
+  - id: "PLACEHOLDER_LD_PRELOAD_ENV"
+    name: "Example: execve with LD_PRELOAD in environment"
+    severity: "medium"
+    description: "Detects LD_PRELOAD= in the process environ at execve time (userspace /proc read)."
+    tags: ["persistence", "hijack"]
+    mitre_tactics: ["Persistence", "Privilege Escalation", "Defense Evasion"]
+    mitre_techniques: ["T1574.006"]
+    references:
+      - "https://attack.mitre.org/techniques/T1574/006/"
+    conditions:
+      syscall: "execve"
+      env_contains:
+        - "LD_PRELOAD="
 
 suppressions: []
