@@ -1611,11 +1611,7 @@ rules:
             }
             thread::sleep(Duration::from_millis(10));
         }
-        assert!(
-            ready,
-            "timeout waiting for LD_PRELOAD= in {}",
-            environ_path
-        );
+        assert!(ready, "timeout waiting for LD_PRELOAD= in {}", environ_path);
 
         struct KillChild(std::process::Child);
         impl Drop for KillChild {
