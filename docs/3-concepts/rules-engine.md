@@ -97,6 +97,8 @@ Rules that use **`argv_contains`**, **`cmdline_contains_any`**, or **`cmdline_co
 | `syscall` | string | Required for most precise rules; must be a supported syscall name (see table above). |
 | `flags_contains` | list of strings | Each named flag must be present on the event (`PROT_*`, `MAP_*`, and so on — validated at load time). |
 | `flags_excludes` | list of strings | If any listed flag is present, the rule does not match. |
+| `flags_mask_all` | integer | Bitmask: require `(event.flags & mask) == mask` (use for exact `mprotect` prot combinations, e.g. `PROT_READ \| PROT_WRITE \| PROT_EXEC` = 7). |
+| `flags_mask_none` | integer | Bitmask: require `(event.flags & mask) == 0` (none of these bits set). |
 | `min_size` | integer | Event length field must be ≥ this value (where applicable). |
 | `cgroup_pattern` | regex string | Matched against the cgroup path when enrichment provides it. |
 | `process_name_pattern` | regex string | Matched against the task `comm` (process name from the kernel). |
@@ -106,8 +108,55 @@ Rules that use **`argv_contains`**, **`cmdline_contains_any`**, or **`cmdline_co
 | `uid` | unsigned integer | Effective UID from the event must match. |
 | `pathname_pattern` | regex string | **Requires** `syscall: openat`. Matched against a resolved path built from the in-kernel pathname snapshot and `/proc` fd resolution when needed. |
 | `ptrace_request` | unsigned integer | **Requires** `syscall: ptrace`. Compared to the ptrace request number on the event (for example `16` for `PTRACE_ATTACH`). |
+| `frequency_window` | object | Sliding-window frequency gate (see below). |
+| `syscall_failures_only` | boolean | If true, only syscall **failures** (`ret < 0`) count toward `frequency_window` and the current event must also be a failure. **Requires** `frequency_window`. |
 
 Regex patterns are compiled once at load time, not per event.
+
+## Sliding-window frequency (`frequency_window`)
+
+Detect repeated behavior in a time window **per TGID** (for example many failed `openat` calls):
+
+```yaml
+conditions:
+  syscall: "openat"
+  syscall_failures_only: true
+  frequency_window:
+    min_occurrences: 10
+    syscall: "openat"
+    window_secs: 5
+```
+
+- **`min_occurrences`**: at least this many matching events in the window.
+- **`syscall`**: which syscall name to count in the window (must be a supported syscall).
+- **`window_secs`**: sliding window length in seconds (converted to nanoseconds at evaluation time).
+
+The engine maintains a bounded deque of recent syscalls per process for this check. **`suppressions`** cannot use `frequency_window` or `syscall_failures_only`.
+
+## Ordered sequence + noise tolerance (`sequence`)
+
+Optional **per-rule** block (sibling of `conditions`, not inside it). Defines an ordered syscall chain **per TGID**. The rule matches only when:
+
+1. The chain has reached the **last** step (same syscall as `conditions.syscall`), and  
+2. All `conditions` (flags, pathname, and so on) match that final event.
+
+```yaml
+rules:
+  - id: "CHAIN_JIT"
+    name: "mmap then mprotect then memfd"
+    severity: "high"
+    description: "Example: tolerate unrelated syscalls between steps."
+    sequence:
+      steps: ["mmap", "mprotect", "memfd_create"]
+      allow_unmapped_between: true
+    conditions:
+      syscall: "memfd_create"
+```
+
+- **`steps`**: syscall names in order. **`conditions.syscall` must match the last step** (validated at load time).
+- **`allow_unmapped_between`**: if true, syscalls **not** listed in `steps` do **not** reset progress. A syscall that **is** in `steps` but appears **out of order** resets the chain (or starts over if it matches step 0).
+
+After a rule **matches**, its sequence progress for that TGID resets so a new chain can begin.
 
 ## Stateful conditions (`stateful`)
 

@@ -1,12 +1,26 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use mace_ebpf_common::EventType;
 
 use crate::pipeline::EnrichedEvent;
 
 const NS_PER_MS: u64 = 1_000_000;
+const NS_PER_SEC: u64 = 1_000_000_000;
+/// Keep enough recent events for sliding-window frequency rules and trimming by age.
+const RECENT_EVENTS_MAX: usize = 8192;
+/// Drop entries older than this (seconds) even if `expire_old` window is larger.
+const RECENT_EVENTS_MAX_AGE_SECS: u64 = 300;
+
 const PROT_WRITE: u64 = 0x2;
 const PROT_EXEC: u64 = 0x4;
+
+/// One syscall observation for sliding-window frequency and sequence noise handling.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RecentSyscall {
+    pub timestamp_ns: u64,
+    pub event_type: EventType,
+    pub ret: i64,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProcessState {
@@ -18,6 +32,10 @@ pub struct ProcessState {
     pub total_rwx_bytes: u64,
     pub mprotect_exec_count: usize,
     pub unique_addresses: HashSet<u64>,
+    /// Recent syscalls (newest at back) for frequency windows and sequence “skip unmapped” logic.
+    pub recent_syscalls: VecDeque<RecentSyscall>,
+    /// Per-rule-id index into `Rule::sequence.steps` (0 = waiting for step 0).
+    pub sequence_progress: HashMap<String, usize>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -47,10 +65,21 @@ impl StateTracker {
             total_rwx_bytes: 0,
             mprotect_exec_count: 0,
             unique_addresses: HashSet::new(),
+            recent_syscalls: VecDeque::new(),
+            sequence_progress: HashMap::new(),
         });
 
         state.last_seen = timestamp_ns;
         state.event_count += 1;
+
+        state.recent_syscalls.push_back(RecentSyscall {
+            timestamp_ns,
+            event_type: event.inner.event_type,
+            ret: event.inner.ret,
+        });
+        while state.recent_syscalls.len() > RECENT_EVENTS_MAX {
+            state.recent_syscalls.pop_front();
+        }
 
         let syscall_id = event.inner.event_type as i64;
         *state.syscall_counts.entry(syscall_id).or_insert(0) += 1;
@@ -71,11 +100,60 @@ impl StateTracker {
         self.states.get(&tgid)
     }
 
+    pub fn get_mut(&mut self, tgid: u32) -> Option<&mut ProcessState> {
+        self.states.get_mut(&tgid)
+    }
+
     pub fn expire_old(&mut self, now_ns: u64) {
         let ttl_ns = self.window_ms.saturating_mul(NS_PER_MS);
+        let max_age_ns = RECENT_EVENTS_MAX_AGE_SECS.saturating_mul(NS_PER_SEC);
+        for state in self.states.values_mut() {
+            let cutoff = now_ns.saturating_sub(max_age_ns);
+            while let Some(front) = state.recent_syscalls.front() {
+                if front.timestamp_ns < cutoff || state.recent_syscalls.len() > RECENT_EVENTS_MAX {
+                    state.recent_syscalls.pop_front();
+                } else {
+                    break;
+                }
+            }
+        }
         self.states
             .retain(|_, state| now_ns.saturating_sub(state.last_seen) <= ttl_ns);
     }
+}
+
+impl ProcessState {
+    /// Count events in `recent_syscalls` matching `syscall_name` in the last `window_ns` nanoseconds.
+    /// If `only_failures`, only `ret < 0` counts.
+    pub fn frequency_count(
+        &self,
+        syscall_name: &str,
+        window_ns: u64,
+        now_ns: u64,
+        only_failures: bool,
+    ) -> usize {
+        let cutoff = now_ns.saturating_sub(window_ns);
+        self.recent_syscalls
+            .iter()
+            .filter(|ev| {
+                ev.timestamp_ns >= cutoff
+                    && event_type_matches_syscall(ev.event_type, syscall_name)
+                    && (!only_failures || ev.ret < 0)
+            })
+            .count()
+    }
+}
+
+fn event_type_matches_syscall(ty: EventType, syscall: &str) -> bool {
+    let name = match ty {
+        EventType::Mmap => "mmap",
+        EventType::MprotectWX => "mprotect",
+        EventType::MemfdCreate => "memfd_create",
+        EventType::Ptrace => "ptrace",
+        EventType::Execve => "execve",
+        EventType::Openat => "openat",
+    };
+    name.eq_ignore_ascii_case(syscall)
 }
 
 fn is_rwx_mapping(flags: u64) -> bool {
@@ -217,6 +295,7 @@ mod tests {
                 process_name_regex: None,
                 pathname_regex: None,
                 cmdline_context_regex: None,
+                sequence: None,
             }],
             suppressions: vec![],
         };
@@ -262,6 +341,7 @@ mod tests {
                 process_name_regex: None,
                 pathname_regex: None,
                 cmdline_context_regex: None,
+                sequence: None,
             }],
             suppressions: vec![],
         };
@@ -300,6 +380,7 @@ mod tests {
                 process_name_regex: None,
                 pathname_regex: None,
                 cmdline_context_regex: None,
+                sequence: None,
             }],
             suppressions: vec![],
         };

@@ -411,9 +411,16 @@ async fn run_partition_worker(
 
         state_tracker.update(&event);
         state_tracker.expire_old(event.inner.timestamp_ns);
-        let state = state_tracker.get(event.inner.tgid);
+        let tgid = event.inner.tgid;
 
         let current_rules = rules.load();
+        if let Some(st_mut) = state_tracker.get_mut(tgid) {
+            for rule in current_rules.rules() {
+                rule.advance_sequence(&event, st_mut);
+            }
+        }
+
+        let state = state_tracker.get(tgid);
         let (matches, suppressed_by) = current_rules.evaluate_with_suppressions(&event, state);
         let suppress_alerts = !suppressed_by.is_empty();
 
@@ -481,6 +488,12 @@ async fn run_partition_worker(
                     event.inner.tgid,
                     e
                 ),
+            }
+        }
+
+        if let Some(st_mut) = state_tracker.get_mut(tgid) {
+            for rule in &matches {
+                rule.reset_sequence_progress(st_mut);
             }
         }
 
@@ -1039,6 +1052,7 @@ mod tests {
                 process_name_regex: None,
                 pathname_regex: None,
                 cmdline_context_regex: None,
+                sequence: None,
             }],
             suppressions: vec![],
         }));

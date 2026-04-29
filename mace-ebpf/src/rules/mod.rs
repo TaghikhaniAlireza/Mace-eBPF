@@ -66,6 +66,9 @@ pub struct Rule {
     /// Regex against inherited / current exec command line (execve snapshot or `cmdline_context` on later syscalls).
     #[serde(skip)]
     pub cmdline_context_regex: Option<Regex>,
+    /// Ordered per-TGID state machine (optional).
+    #[serde(default)]
+    pub sequence: Option<SequenceRule>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -84,6 +87,12 @@ pub struct Conditions {
     pub flags_contains: Vec<String>,
     #[serde(default)]
     pub flags_excludes: Vec<String>,
+    /// Require `(event.flags & mask) == mask` (bitwise). Useful for exact `mprotect` prot combinations.
+    #[serde(default)]
+    pub flags_mask_all: Option<u64>,
+    /// Require `(event.flags & mask) == 0` (none of these bits set).
+    #[serde(default)]
+    pub flags_mask_none: Option<u64>,
     pub min_size: Option<u64>,
     pub cgroup_pattern: Option<String>,
     /// Regex matched against the process `comm` (task name), e.g. `"^cat$"`.
@@ -107,6 +116,33 @@ pub struct Conditions {
     /// Optional `ptrace` request number (e.g. 16 for `PTRACE_ATTACH`); if set, must equal `event.flags`.
     #[serde(default)]
     pub ptrace_request: Option<u64>,
+    /// Sliding-window frequency: at least `min_occurrences` of `syscall` within `window_secs` for this TGID.
+    #[serde(default)]
+    pub frequency_window: Option<FrequencyWindow>,
+    /// If true, require `event.inner.ret < 0` (syscall failure). Combine with `frequency_window` for brute-force style rules.
+    #[serde(default)]
+    pub syscall_failures_only: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct FrequencyWindow {
+    pub min_occurrences: usize,
+    pub syscall: String,
+    /// Sliding window length in seconds (converted to ns at evaluation time).
+    pub window_secs: u64,
+}
+
+/// Ordered syscall sequence per TGID. When set, the rule matches only when the **last** step is
+/// observed and `conditions` match that final event; intermediate syscalls may be ignored if
+/// `allow_unmapped_between` is true (noise tolerance).
+#[derive(Clone, Debug, Deserialize)]
+pub struct SequenceRule {
+    /// Syscall names in order, e.g. `["mmap", "mprotect", "memfd_create"]`.
+    #[serde(default)]
+    pub steps: Vec<String>,
+    /// If true, syscalls not listed in `steps` do not reset progress (only a wrong **mapped** step resets).
+    #[serde(default)]
+    pub allow_unmapped_between: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -129,6 +165,24 @@ impl Rule {
     }
 
     pub fn matches_with_state(&self, event: &EnrichedEvent, state: Option<&ProcessState>) -> bool {
+        if let Some(seq) = &self.sequence {
+            if seq.steps.is_empty() {
+                return false;
+            }
+            let Some(st) = state else {
+                return false;
+            };
+            let n = seq.steps.len();
+            let idx = *st.sequence_progress.get(&self.id).unwrap_or(&0);
+            if idx != n {
+                return false;
+            }
+            let last = seq.steps[n - 1].as_str();
+            if !last.eq_ignore_ascii_case(event_syscall_name(event)) {
+                return false;
+            }
+        }
+
         evaluate_rule_conditions(
             &self.conditions,
             self.process_name_regex.as_ref(),
@@ -139,6 +193,47 @@ impl Rule {
             state,
             self.stateful.as_ref(),
         )
+    }
+
+    /// Update per-TGID sequence progress for this rule **before** evaluating [`Self::matches_with_state`].
+    pub fn advance_sequence(&self, event: &EnrichedEvent, state: &mut ProcessState) {
+        let Some(seq) = &self.sequence else {
+            return;
+        };
+        if seq.steps.is_empty() {
+            return;
+        }
+        let entry = state.sequence_progress.entry(self.id.clone()).or_insert(0);
+        let mut idx = *entry;
+        if idx >= seq.steps.len() {
+            idx = 0;
+        }
+        let cur = event_syscall_name(event);
+        let expected = seq.steps[idx].as_str();
+        if cur.eq_ignore_ascii_case(expected) {
+            idx += 1;
+            *entry = idx;
+            return;
+        }
+        let maps_to_step = seq
+            .steps
+            .iter()
+            .any(|s| s.as_str().eq_ignore_ascii_case(cur));
+        if maps_to_step {
+            *entry = 0;
+            if seq.steps[0].as_str().eq_ignore_ascii_case(cur) {
+                *entry = 1;
+            }
+        } else if !seq.allow_unmapped_between {
+            *entry = 0;
+        }
+    }
+
+    /// After a rule matched, allow a new chain to start.
+    pub fn reset_sequence_progress(&self, state: &mut ProcessState) {
+        if self.sequence.is_some() {
+            state.sequence_progress.insert(self.id.clone(), 0);
+        }
     }
 }
 
@@ -175,6 +270,41 @@ pub(crate) fn evaluate_rule_conditions(
         .any(|name| is_flag_present(flags, name))
     {
         return false;
+    }
+
+    if let Some(mask) = conditions.flags_mask_all
+        && (flags & mask) != mask
+    {
+        return false;
+    }
+
+    if let Some(mask) = conditions.flags_mask_none
+        && (flags & mask) != 0
+    {
+        return false;
+    }
+
+    if conditions.syscall_failures_only && event.inner.ret >= 0 {
+        return false;
+    }
+
+    if let Some(fw) = &conditions.frequency_window {
+        let Some(st) = state else {
+            return false;
+        };
+        if fw.window_secs == 0 || fw.min_occurrences == 0 {
+            return false;
+        }
+        let window_ns = fw.window_secs.saturating_mul(1_000_000_000);
+        let cnt = st.frequency_count(
+            fw.syscall.as_str(),
+            window_ns,
+            event.inner.timestamp_ns,
+            conditions.syscall_failures_only,
+        );
+        if cnt < fw.min_occurrences {
+            return false;
+        }
     }
 
     if let Some(min_size) = conditions.min_size
@@ -335,7 +465,30 @@ pub(crate) fn validate_rule(rule: &Rule) -> Result<(), RuleError> {
             "rule name cannot be empty".into(),
         ));
     }
-    validate_conditions_structured(&rule.conditions)
+    validate_conditions_structured(&rule.conditions)?;
+    if let Some(seq) = &rule.sequence {
+        if seq.steps.is_empty() {
+            return Err(RuleError::InvalidCondition(
+                "sequence.steps cannot be empty when sequence is set".into(),
+            ));
+        }
+        for step in &seq.steps {
+            if !is_supported_syscall(step) {
+                return Err(RuleError::InvalidCondition(format!(
+                    "sequence step has unsupported syscall: {step}"
+                )));
+            }
+        }
+        if let Some(last_cond) = rule.conditions.syscall.as_deref() {
+            let last_step = seq.steps.last().expect("steps non-empty");
+            if !last_step.eq_ignore_ascii_case(last_cond) {
+                return Err(RuleError::InvalidCondition(format!(
+                    "conditions.syscall must match the last sequence step (got {last_cond}, last step {last_step})"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Validates [`Conditions`] shared by rules and [`SuppressionEntry`] (regex syntax only — compilation is separate).
@@ -372,6 +525,31 @@ pub(crate) fn validate_conditions_structured(conditions: &Conditions) -> Result<
                 "ptrace_request requires syscall: ptrace".into(),
             ));
         }
+    }
+
+    if let Some(fw) = &conditions.frequency_window {
+        if fw.min_occurrences == 0 {
+            return Err(RuleError::InvalidCondition(
+                "frequency_window.min_occurrences must be >= 1".into(),
+            ));
+        }
+        if fw.window_secs == 0 {
+            return Err(RuleError::InvalidCondition(
+                "frequency_window.window_secs must be >= 1".into(),
+            ));
+        }
+        if !is_supported_syscall(&fw.syscall) {
+            return Err(RuleError::InvalidCondition(format!(
+                "frequency_window.syscall unsupported: {}",
+                fw.syscall
+            )));
+        }
+    }
+
+    if conditions.syscall_failures_only && conditions.frequency_window.is_none() {
+        return Err(RuleError::InvalidCondition(
+            "syscall_failures_only requires frequency_window".into(),
+        ));
     }
 
     for flag in &conditions.flags_contains {
@@ -418,6 +596,12 @@ pub(crate) fn validate_suppression_entry(entry: &SuppressionEntry) -> Result<(),
     if entry.name.trim().is_empty() {
         return Err(RuleError::InvalidCondition(
             "suppression name cannot be empty".into(),
+        ));
+    }
+    let c = &entry.conditions;
+    if c.frequency_window.is_some() || c.syscall_failures_only {
+        return Err(RuleError::InvalidCondition(
+            "suppressions cannot use frequency_window or syscall_failures_only".into(),
         ));
     }
     validate_conditions_structured(&entry.conditions)
@@ -672,6 +856,7 @@ rules:
             process_name_regex: None,
             pathname_regex: None,
             cmdline_context_regex: None,
+            sequence: None,
         };
         let mut ev = fake_enriched_event(EventType::Mmap, 0, 4096);
         ev.cmdline_context = Some("/bin/evil.sh".into());
@@ -698,6 +883,7 @@ rules:
             process_name_regex: None,
             pathname_regex: None,
             cmdline_context_regex: None,
+            sequence: None,
         };
         let mut ev = fake_enriched_event(EventType::Execve, 0, 0);
         ev.inner.uid = 0;
@@ -728,6 +914,7 @@ rules:
             process_name_regex: None,
             pathname_regex: None,
             cmdline_context_regex: None,
+            sequence: None,
         };
         let mprotect_event = fake_enriched_event(EventType::MprotectWX, 0, 4096);
         let mmap_event = fake_enriched_event(EventType::Mmap, 0, 4096);
@@ -751,6 +938,7 @@ rules:
             process_name_regex: None,
             pathname_regex: None,
             cmdline_context_regex: None,
+            sequence: None,
         };
 
         let match_event = fake_enriched_event(
@@ -779,6 +967,7 @@ rules:
             process_name_regex: None,
             pathname_regex: None,
             cmdline_context_regex: None,
+            sequence: None,
         };
 
         let anonymous = fake_enriched_event(EventType::Mmap, MAP_ANONYMOUS | PROT_EXEC, 4096);
@@ -805,6 +994,7 @@ rules:
                     process_name_regex: None,
                     pathname_regex: None,
                     cmdline_context_regex: None,
+                    sequence: None,
                 },
                 Rule {
                     id: "R2".into(),
@@ -820,6 +1010,7 @@ rules:
                     process_name_regex: None,
                     pathname_regex: None,
                     cmdline_context_regex: None,
+                    sequence: None,
                 },
                 Rule {
                     id: "R3".into(),
@@ -835,6 +1026,7 @@ rules:
                     process_name_regex: None,
                     pathname_regex: None,
                     cmdline_context_regex: None,
+                    sequence: None,
                 },
             ],
             suppressions: vec![],
@@ -851,6 +1043,168 @@ rules:
         let set = RuleSet::default();
         let event = fake_enriched_event(EventType::Mmap, PROT_EXEC, 4096);
         assert!(set.evaluate(&event, None).is_empty());
+    }
+
+    #[test]
+    fn frequency_window_openat_failures() {
+        let yaml = r#"
+rules:
+  - id: "FREQ-OPENAT-FAIL"
+    name: "many failed openat"
+    severity: "high"
+    description: "brute force style"
+    conditions:
+      syscall: "openat"
+      syscall_failures_only: true
+      frequency_window:
+        min_occurrences: 3
+        syscall: "openat"
+        window_secs: 5
+"#;
+        let set = RuleSet::from_yaml_str(yaml).expect("parse");
+        let mut st = crate::state::ProcessState {
+            tgid: 1,
+            first_seen: 0,
+            last_seen: 0,
+            event_count: 0,
+            syscall_counts: std::collections::HashMap::new(),
+            total_rwx_bytes: 0,
+            mprotect_exec_count: 0,
+            unique_addresses: std::collections::HashSet::new(),
+            recent_syscalls: std::collections::VecDeque::new(),
+            sequence_progress: std::collections::HashMap::new(),
+        };
+        let base = 1_000_000_000u64;
+        for i in 0..2u64 {
+            st.recent_syscalls.push_back(crate::state::RecentSyscall {
+                timestamp_ns: base + i * 1_000_000,
+                event_type: EventType::Openat,
+                ret: -2,
+            });
+        }
+        let ev = fake_enriched_event(EventType::Openat, 0, 0);
+        let mut ev3 = ev.clone();
+        ev3.inner.timestamp_ns = base + 3_000_000;
+        ev3.inner.ret = -2;
+        assert!(
+            !set.rules[0].matches_with_state(&ev3, Some(&st)),
+            "need third failure including current event"
+        );
+        st.recent_syscalls.push_back(crate::state::RecentSyscall {
+            timestamp_ns: ev3.inner.timestamp_ns,
+            event_type: EventType::Openat,
+            ret: -2,
+        });
+        assert!(set.rules[0].matches_with_state(&ev3, Some(&st)));
+    }
+
+    #[test]
+    fn flags_mask_all_exact_mprotect_rwx() {
+        let prot_rwx = PROT_READ | PROT_WRITE | PROT_EXEC;
+        let yaml = format!(
+            r#"
+rules:
+  - id: "MASK-RWX"
+    name: "exact prot"
+    severity: "high"
+    description: "d"
+    conditions:
+      syscall: "mprotect"
+      flags_mask_all: {prot_rwx}
+"#
+        );
+        let set = RuleSet::from_yaml_str(&yaml).expect("parse");
+        let ok = fake_enriched_event(EventType::MprotectWX, prot_rwx, 4096);
+        assert!(set.rules[0].matches(&ok));
+        let missing_exec = fake_enriched_event(EventType::MprotectWX, PROT_READ | PROT_WRITE, 4096);
+        assert!(!set.rules[0].matches(&missing_exec));
+    }
+
+    #[test]
+    fn sequence_skip_unmapped_noise() {
+        let yaml = r#"
+rules:
+  - id: "SEQ-ABC"
+    name: "chain"
+    severity: "high"
+    description: "d"
+    sequence:
+      steps: ["mmap", "mprotect", "memfd_create"]
+      allow_unmapped_between: true
+    conditions:
+      syscall: "memfd_create"
+"#;
+        let set = RuleSet::from_yaml_str(yaml).expect("parse");
+        let rule = &set.rules[0];
+        let mut st = crate::state::ProcessState {
+            tgid: 99,
+            first_seen: 0,
+            last_seen: 0,
+            event_count: 0,
+            syscall_counts: std::collections::HashMap::new(),
+            total_rwx_bytes: 0,
+            mprotect_exec_count: 0,
+            unique_addresses: std::collections::HashSet::new(),
+            recent_syscalls: std::collections::VecDeque::new(),
+            sequence_progress: std::collections::HashMap::new(),
+        };
+
+        let e1 = fake_enriched_event(EventType::Mmap, 0, 4096);
+        rule.advance_sequence(&e1, &mut st);
+        assert_eq!(*st.sequence_progress.get("SEQ-ABC").unwrap_or(&0), 1);
+
+        let noise = fake_enriched_event(EventType::Openat, 0, 0);
+        rule.advance_sequence(&noise, &mut st);
+        assert_eq!(*st.sequence_progress.get("SEQ-ABC").unwrap_or(&0), 1);
+
+        let e2 = fake_enriched_event(EventType::MprotectWX, PROT_EXEC, 4096);
+        rule.advance_sequence(&e2, &mut st);
+        assert_eq!(*st.sequence_progress.get("SEQ-ABC").unwrap_or(&0), 2);
+
+        let e3 = fake_enriched_event(EventType::MemfdCreate, 0, 0);
+        rule.advance_sequence(&e3, &mut st);
+        assert_eq!(*st.sequence_progress.get("SEQ-ABC").unwrap_or(&0), 3);
+        assert!(rule.matches_with_state(&e3, Some(&st)));
+
+        rule.reset_sequence_progress(&mut st);
+        assert_eq!(*st.sequence_progress.get("SEQ-ABC").unwrap_or(&0), 0);
+    }
+
+    #[test]
+    fn sequence_wrong_mapped_step_resets() {
+        let yaml = r#"
+rules:
+  - id: "SEQ-XY"
+    name: "three step"
+    severity: "high"
+    description: "d"
+    sequence:
+      steps: ["mmap", "mprotect", "memfd_create"]
+      allow_unmapped_between: true
+    conditions:
+      syscall: "memfd_create"
+"#;
+        let set = RuleSet::from_yaml_str(yaml).expect("parse");
+        let rule = &set.rules[0];
+        let mut st = crate::state::ProcessState {
+            tgid: 5,
+            first_seen: 0,
+            last_seen: 0,
+            event_count: 0,
+            syscall_counts: std::collections::HashMap::new(),
+            total_rwx_bytes: 0,
+            mprotect_exec_count: 0,
+            unique_addresses: std::collections::HashSet::new(),
+            recent_syscalls: std::collections::VecDeque::new(),
+            sequence_progress: std::collections::HashMap::new(),
+        };
+        let e1 = fake_enriched_event(EventType::Mmap, 0, 4096);
+        rule.advance_sequence(&e1, &mut st);
+        assert_eq!(*st.sequence_progress.get("SEQ-XY").unwrap_or(&0), 1);
+        // memfd_create is in the chain but wrong order (expected mprotect next) → reset
+        let wrong = fake_enriched_event(EventType::MemfdCreate, 0, 0);
+        rule.advance_sequence(&wrong, &mut st);
+        assert_eq!(*st.sequence_progress.get("SEQ-XY").unwrap_or(&0), 0);
     }
 
     #[tokio::test(flavor = "current_thread")]

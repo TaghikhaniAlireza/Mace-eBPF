@@ -27,6 +27,10 @@ struct RuleFile {
 }
 
 impl RuleSet {
+    pub fn rules(&self) -> &[Rule] {
+        &self.rules
+    }
+
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, RuleError> {
         let content = fs::read_to_string(path)?;
         Self::from_yaml_str(&content)
