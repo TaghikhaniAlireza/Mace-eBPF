@@ -6,6 +6,10 @@
 #
 # Note: `attack_simulator.py` is often run with `sudo`, so syscalls from that process show uid=0.
 # Rules that should match the simulator therefore use uid: 0 where needed, or omit `uid` to match any user.
+#
+# Optional per-rule metadata (JSON / logs): tags, mitre_tactics, mitre_techniques, references
+# Optional conditions: env_contains (execve + /proc environ), target_process_pattern (ptrace target comm),
+#   memfd_name_pattern (memfd_create name snapshot).
 
 rules:
   # Interactive testing: plain `whoami` in another terminal (execve argv contains this substring).
@@ -13,6 +17,10 @@ rules:
     name: "Interactive whoami (manual test)"
     severity: "medium"
     description: "Matches execve cmdline containing whoami (see also attack_simulator / SIM_*)."
+    tags: ["simulation", "recon"]
+    mitre_tactics: ["Discovery"]
+    mitre_techniques: ["T1033"]
+    references: ["https://attack.mitre.org/techniques/T1033/"]
     conditions:
       syscall: "execve"
       argv_contains:
@@ -22,6 +30,10 @@ rules:
     name: "Anonymous RWX via mprotect"
     severity: "high"
     description: "Detect transition to PROT_READ|PROT_WRITE|PROT_EXEC on memory (JIT-style shellcode staging)."
+    tags: ["simulation", "memory", "defense-evasion"]
+    mitre_tactics: ["Defense Evasion"]
+    mitre_techniques: ["T1055", "T1055.008"]
+    references: ["https://attack.mitre.org/techniques/T1055/008/"]
     conditions:
       syscall: "mprotect"
       flags_contains: ["PROT_EXEC", "PROT_WRITE"]
@@ -30,16 +42,27 @@ rules:
     name: "Execution from /tmp copy"
     severity: "high"
     description: "Detect execve where argv references the simulated payload copied under /tmp."
+    tags: ["simulation", "execution", "persistence"]
+    mitre_tactics: ["Execution"]
+    mitre_techniques: ["T1204.002"]
+    references: ["https://attack.mitre.org/techniques/T1204/002/"]
     conditions:
       syscall: "execve"
       argv_contains:
         - "malicious_payload"
+      # attack_simulator sets LD_PRELOAD in the child environ for this execve path
+      env_contains:
+        - "LD_PRELOAD="
 
   # Matches `cat /etc/shadow` whether run as root (simulator) or as a normal user: no uid filter.
   - id: "SIM_C_SHADOW_EXEC"
     name: "Sensitive read via shell (execve cmdline)"
     severity: "critical"
     description: "Detect execve whose captured argv contains cat and /etc/shadow (covers `sh -c 'cat ...'`)."
+    tags: ["simulation", "credential-access"]
+    mitre_tactics: ["Credential Access"]
+    mitre_techniques: ["T1003.008"]
+    references: ["https://attack.mitre.org/techniques/T1003/008/"]
     conditions:
       syscall: "execve"
       cmdline_contains_any:
@@ -49,6 +72,10 @@ rules:
     name: "Sensitive file open (openat)"
     severity: "critical"
     description: "Detect openat resolving to /etc/shadow (path captured in-kernel at sys_enter_openat)."
+    tags: ["simulation", "credential-access"]
+    mitre_tactics: ["Credential Access"]
+    mitre_techniques: ["T1003.008"]
+    references: ["https://attack.mitre.org/techniques/T1003/008/"]
     conditions:
       syscall: "openat"
       pathname_pattern: ".*/etc/shadow$"
@@ -57,9 +84,27 @@ rules:
     name: "Ptrace attach attempt"
     severity: "critical"
     description: "Detect ptrace(PTRACE_ATTACH, ...) — emitted on syscall exit even when EPERM/ESRCH (failed attach)."
+    tags: ["simulation", "privilege-escalation"]
+    mitre_tactics: ["Privilege Escalation", "Defense Evasion"]
+    mitre_techniques: ["T1055.008"]
+    references: ["https://attack.mitre.org/techniques/T1055/008/"]
     conditions:
       syscall: "ptrace"
       ptrace_request: 16
+      # Scenario attaches to pid 1 (init/systemd); comm read from /proc/1/comm at eval time
+      target_process_pattern: "^(systemd|init)$"
+
+  - id: "SIM_D_MEMFD_SPOOFED_NAME"
+    name: "memfd_create with suspicious name (simulation)"
+    severity: "high"
+    description: "attack_simulator calls memfd_create with a spoofed-style name; matches memfd_name_pattern."
+    tags: ["simulation", "defense-evasion", "fileless"]
+    mitre_tactics: ["Defense Evasion"]
+    mitre_techniques: ["T1055.009"]
+    references: ["https://attack.mitre.org/techniques/T1055/009/"]
+    conditions:
+      syscall: "memfd_create"
+      memfd_name_pattern: "kworker|mace_sim"
 
 # ------------------------------------------------------------------------------
 # Suppressions: trusted / high-volume benign patterns (adjust for your fleet).

@@ -98,8 +98,18 @@ def scenario_b_tmp_exec() -> None:
     shutil.copy2("/bin/ls", dst)
     os.chmod(dst, 0o755)
     try:
-        _step(2, f"execve: run `{dst} --version` (argv must contain 'malicious_payload').")
-        subprocess.run([dst, "--version"], check=False, capture_output=True, timeout=5)
+        _step(
+        2,
+        f"execve: run `{dst} --version` with LD_PRELOAD= in environ "
+        "(rules: argv + env_contains).",
+    )
+        subprocess.run(
+            [dst, "--version"],
+            check=False,
+            capture_output=True,
+            timeout=5,
+            env={**os.environ, "LD_PRELOAD": ""},
+        )
     finally:
         _step(3, f"Remove {dst}.")
         try:
@@ -133,6 +143,31 @@ def scenario_c_shadow_and_ptrace() -> None:
     print("  Scenario C complete.", flush=True)
 
 
+def scenario_d_memfd_named() -> None:
+    """Call memfd_create with a name that matches SIM_D_MEMFD_SPOOFED_NAME in rules.yaml."""
+    _hdr("Scenario D — memfd_create (named anonymous file)")
+    libc = ctypes.CDLL("libc.so.6", use_errno=True)
+    # Linux memfd_create(2); name appears in kernel/eBPF memfd snapshot (see rules memfd_name_pattern).
+    try:
+        memfd_create = libc.memfd_create
+    except AttributeError:
+        print("  Skip: libc has no memfd_create (unexpected on Linux).", flush=True)
+        return
+    MFD_CLOEXEC = 0x0001
+    memfd_create.argtypes = [ctypes.c_char_p, ctypes.c_uint]
+    memfd_create.restype = ctypes.c_int
+    _step(1, "memfd_create(name='mace_sim_fd', MFD_CLOEXEC).")
+    fd = memfd_create(b"mace_sim_fd", MFD_CLOEXEC)
+    if fd < 0:
+        errno = ctypes.get_errno()
+        raise OSError(errno, "memfd_create failed")
+    try:
+        _step(2, f"got fd={fd} (close on exit).")
+    finally:
+        os.close(fd)
+    print("  Scenario D complete.", flush=True)
+
+
 def main() -> int:
     print(
         f"[sim] Effective UID for this Python process: {os.geteuid()} "
@@ -142,6 +177,7 @@ def main() -> int:
     scenario_a_rwx_mprotect()
     scenario_b_tmp_exec()
     scenario_c_shadow_and_ptrace()
+    scenario_d_memfd_named()
     _hdr("All scenarios finished")
     print(
         "  If Mace is running with tests/simulations/rules.yaml, check the monitor for "
