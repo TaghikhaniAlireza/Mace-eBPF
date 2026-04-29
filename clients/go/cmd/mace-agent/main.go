@@ -115,7 +115,7 @@ func run(configPath string) error {
 
 func logSecurityEvent(log *logrus.Logger, ev *mace.MaceEvent, format string) {
 	if format == "json" {
-		log.WithFields(logrus.Fields{
+		fields := logrus.Fields{
 			"kind":          "security_event",
 			"timestamp_ns":  ev.Timestamp,
 			"pid":           ev.PID,
@@ -127,12 +127,24 @@ func logSecurityEvent(log *logrus.Logger, ev *mace.MaceEvent, format string) {
 			"arguments":     ev.Arguments,
 			"matched_rules": ev.MatchedRules,
 			"suppressed_by": ev.SuppressedBy,
-		}).Info("event")
+		}
+		if ev.Shadow || len(ev.ShadowMatchedRules) > 0 {
+			fields["shadow"] = ev.Shadow
+			fields["shadow_matched_rules"] = ev.ShadowMatchedRules
+		}
+		if len(ev.MatchedRuleMetadata) > 0 {
+			fields["matched_rule_metadata"] = ev.MatchedRuleMetadata
+		}
+		if len(ev.ShadowRuleMetadata) > 0 {
+			fields["shadow_rule_metadata"] = ev.ShadowRuleMetadata
+		}
+		log.WithFields(fields).Info("event")
 		return
 	}
 	log.Infof(
-		"syscall=%s pid=%d uid=%d user=%q comm=%q cmdline=%q matched=%v suppressed_by=%v args=%v ts_ns=%d",
+		"syscall=%s pid=%d uid=%d user=%q comm=%q cmdline=%q matched=%v suppressed_by=%v shadow=%v shadow_matched=%v rule_meta=%+v shadow_meta=%+v args=%v ts_ns=%d",
 		ev.SyscallName, ev.PID, ev.UID, ev.Username, ev.ProcessName, ev.Cmdline,
-		ev.MatchedRules, ev.SuppressedBy, ev.Arguments, ev.Timestamp,
+		ev.MatchedRules, ev.SuppressedBy, ev.Shadow, ev.ShadowMatchedRules,
+		ev.MatchedRuleMetadata, ev.ShadowRuleMetadata, ev.Arguments, ev.Timestamp,
 	)
 }
