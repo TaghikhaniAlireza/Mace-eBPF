@@ -214,23 +214,31 @@ jobs:
           ROOT="${GITHUB_WORKSPACE}"
 
           ( cd "${ROOT}/mace-ebpf/pkg/mace" && go test -race -v ./... ) &
-          go_pid=$!
+          go_pkg_pid=$!
+
+          ( cd "${ROOT}/clients/go" && go test -race -v ./... ) &
+          go_clients_pid=$!
 
           ( cd "${ROOT}/mace-ebpf/python" && python -m pytest tests/ -v ) &
           py_pid=$!
 
-          go_exit=0
-          wait "${go_pid}" || go_exit=$?
+          go_pkg_exit=0
+          wait "${go_pkg_pid}" || go_pkg_exit=$?
+          go_clients_exit=0
+          wait "${go_clients_pid}" || go_clients_exit=$?
           py_exit=0
           wait "${py_pid}" || py_exit=$?
 
-          if [[ "${go_exit}" -ne 0 ]]; then
-            echo "::error::Go tests failed (exit ${go_exit})"
+          if [[ "${go_pkg_exit}" -ne 0 ]]; then
+            echo "::error::Go tests failed under mace-ebpf/pkg/mace (exit ${go_pkg_exit})"
+          fi
+          if [[ "${go_clients_exit}" -ne 0 ]]; then
+            echo "::error::Go tests failed under clients/go (exit ${go_clients_exit})"
           fi
           if [[ "${py_exit}" -ne 0 ]]; then
             echo "::error::Python tests failed (exit ${py_exit})"
           fi
-          if [[ "${go_exit}" -ne 0 || "${py_exit}" -ne 0 ]]; then
+          if [[ "${go_pkg_exit}" -ne 0 || "${go_clients_exit}" -ne 0 || "${py_exit}" -ne 0 ]]; then
             exit 1
           fi
 
@@ -301,6 +309,9 @@ jobs:
           cargo test -p mace-ebpf --features prometheus --test observability_integration --verbose
 
       - name: Criterion regression gate (arena + rule engine)
+        env:
+          MACE_CRITERION_BASELINE_FILE: "${{ github.workspace }}/scripts/ci/criterion_baseline.json"
+          MACE_CRITERION_REGRESSION_MAX: "5"
         run: |
           set -euxo pipefail
           cargo bench -p mace-ebpf --bench rule_engine_bench --bench arena_benchmark -- --noplot 2>&1 \

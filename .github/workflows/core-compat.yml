@@ -2,7 +2,8 @@
 # CO-RE / eBPF compatibility matrix (hosted runners)
 # =============================================================================
 # Runs BPF verifier load + tracepoint attach + synthetic mprotect on each Ubuntu
-# kernel offered by GitHub Actions. Fails the job if either test fails (strict gate).
+# kernel line offered by GitHub Actions (22.04 / 24.04 / latest). Fails the job if
+# either test fails (strict gate).
 #
 # Note: This complements (does not replace) the Vagrant matrix under scripts/vm/.
 # =============================================================================
@@ -52,12 +53,18 @@ jobs:
         os:
           - ubuntu-22.04
           - ubuntu-24.04
+          - ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+
+      - name: Runner kernel (matrix visibility)
+        run: |
+          set -euxo pipefail
+          uname -a
 
       - name: Install nightly Rust (eBPF / build-std)
         uses: dtolnay/rust-toolchain@nightly

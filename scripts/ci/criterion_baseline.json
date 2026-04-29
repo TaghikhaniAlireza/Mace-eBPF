@@ -1,0 +1,8 @@
+{
+  "comment": "Median nanoseconds from a representative CI run; criterion_gate allows +5% when MACE_CRITERION_BASELINE_FILE is set.",
+  "medians_ns": {
+    "rule_engine/evaluate_256_rules_mmap": 11000,
+    "state_tracker/update_same_tgid": 110,
+    "single_thread_push_pop/try_push_non_full": 50
+  }
+}
