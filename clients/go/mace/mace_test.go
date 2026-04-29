@@ -45,6 +45,19 @@ func TestInitEngineWithConfig_nilLogLevel(t *testing.T) {
 	}
 }
 
+func TestEngineStagedRuleCount_afterLoadRules(t *testing.T) {
+	if err := InitEngine(); err != nil {
+		t.Fatal(err)
+	}
+	const yaml = "rules:\n  - id: A\n    name: n\n    severity: low\n    description: d\n    conditions:\n      syscall: mmap\nsuppressions: []\n"
+	if err := LoadRules(yaml); err != nil {
+		t.Fatal(err)
+	}
+	if n := EngineStagedRuleCount(); n != 1 {
+		t.Fatalf("staged count: got %d want 1", n)
+	}
+}
+
 func TestEngineHealthJSON_withoutPipeline(t *testing.T) {
 	if err := InitEngine(); err != nil {
 		t.Fatal(err)
@@ -64,6 +77,9 @@ func TestEngineHealthJSON_withoutPipeline(t *testing.T) {
 	}
 	if v["pipeline_running"] != false {
 		t.Fatalf("pipeline_running: got %v want false", v["pipeline_running"])
+	}
+	if v["staged_rule_count"] != float64(0) {
+		t.Fatalf("staged_rule_count: got %v want 0", v["staged_rule_count"])
 	}
 }
 

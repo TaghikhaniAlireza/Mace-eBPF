@@ -194,6 +194,7 @@ fn ensure_ffi_function_declarations(header_path: &Path) -> anyhow::Result<()> {
         && content.contains("mace_set_log_level(")
         && content.contains("mace_allowlist_add_tgid(")
         && content.contains("mace_engine_health_json(")
+        && content.contains("mace_engine_staged_rule_count(")
     {
         return Ok(());
     }
@@ -243,6 +244,7 @@ int32_t mace_set_log_level(int32_t level);
 
 int32_t mace_allowlist_add_tgid(uint32_t tgid);
 int32_t mace_engine_health_json(char *out, size_t out_len);
+uint64_t mace_engine_staged_rule_count(void);
 
 #ifdef __cplusplus
 } // extern "C"

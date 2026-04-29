@@ -8,6 +8,7 @@ from .engine import (
     allowlist_add_tgid,
     engine_health_json,
     engine_init,
+    engine_staged_rule_count,
     load_rules_file,
     start_pipeline,
     stop_pipeline,
@@ -32,4 +33,5 @@ __all__ = [
     "stop_pipeline",
     "allowlist_add_tgid",
     "engine_health_json",
+    "engine_staged_rule_count",
 ]

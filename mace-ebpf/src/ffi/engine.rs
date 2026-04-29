@@ -91,6 +91,7 @@ pub extern "C" fn mace_engine_init() -> i32 {
     if let Ok(mut g) = ENGINE_RULES_PATH.lock() {
         *g = None;
     }
+    crate::engine_stage::clear_staged_rule_count();
     audit::record(
         "engine_init",
         "cleared staged rules and stopped prior thread",
@@ -116,11 +117,15 @@ pub unsafe extern "C" fn mace_load_rules(yaml: *const c_char) -> i32 {
             return super::handle::MaceErrorCode::InitFailed as i32;
         }
     };
-    if let Err(e) = crate::rules::loader::RuleSet::from_yaml_str(&s) {
-        tracing::error!("mace_load_rules: invalid yaml: {e}");
-        audit::record("load_rules", &format!("parse_error={e}"), false);
-        return super::handle::MaceErrorCode::InitFailed as i32;
-    }
+    let set = match crate::rules::loader::RuleSet::from_yaml_str(&s) {
+        Ok(set) => set,
+        Err(e) => {
+            tracing::error!("mace_load_rules: invalid yaml: {e}");
+            audit::record("load_rules", &format!("parse_error={e}"), false);
+            return super::handle::MaceErrorCode::InitFailed as i32;
+        }
+    };
+    crate::engine_stage::record_staged_rule_count(set.rules.len());
     if let Ok(mut g) = ENGINE_RULES_PATH.lock() {
         *g = None;
     }
@@ -148,18 +153,22 @@ pub unsafe extern "C" fn mace_load_rules_file(path_utf8: *const c_char) -> i32 {
             return super::handle::MaceErrorCode::InitFailed as i32;
         }
     };
-    if let Err(e) = crate::rules::loader::RuleSet::from_file(&p) {
-        tracing::error!(
-            "mace_load_rules_file: invalid rules file {}: {e}",
-            p.display()
-        );
-        audit::record(
-            "load_rules_file",
-            &format!("{} error={e}", audit_detail_path(&p)),
-            false,
-        );
-        return super::handle::MaceErrorCode::InitFailed as i32;
-    }
+    let set = match crate::rules::loader::RuleSet::from_file(&p) {
+        Ok(set) => set,
+        Err(e) => {
+            tracing::error!(
+                "mace_load_rules_file: invalid rules file {}: {e}",
+                p.display()
+            );
+            audit::record(
+                "load_rules_file",
+                &format!("{} error={e}", audit_detail_path(&p)),
+                false,
+            );
+            return super::handle::MaceErrorCode::InitFailed as i32;
+        }
+    };
+    crate::engine_stage::record_staged_rule_count(set.rules.len());
     if let Ok(mut g) = ENGINE_YAML.lock() {
         *g = None;
     }
@@ -354,6 +363,7 @@ struct HealthJson {
     pipeline_running: bool,
     rule_source: &'static str,
     rule_count: usize,
+    staged_rule_count: usize,
     partition_count: usize,
     ringbuf_capacity_bytes: u64,
     maps_memory_bytes_estimated: u64,
@@ -363,7 +373,14 @@ struct HealthJson {
     kernel_stats_rate_limit_hits: u64,
 }
 
-fn rule_count_best_effort() -> usize {
+fn rule_count_for_health() -> (usize, usize) {
+    let staged = crate::engine_stage::staged_rule_count();
+    let parsed = rule_count_parse_fallback();
+    let effective = if staged > 0 { staged } else { parsed };
+    (effective, staged)
+}
+
+fn rule_count_parse_fallback() -> usize {
     if let Some(p) = engine_rule_path() {
         if let Ok(set) = crate::rules::loader::RuleSet::from_file(&p) {
             return set.rules.len();
@@ -375,6 +392,12 @@ fn rule_count_best_effort() -> usize {
         }
     }
     0
+}
+
+/// Number of rules last staged successfully for the embedded engine (O(1); no disk read).
+#[unsafe(no_mangle)]
+pub extern "C" fn mace_engine_staged_rule_count() -> u64 {
+    crate::engine_stage::staged_rule_count() as u64
 }
 
 fn rule_source_str() -> &'static str {
@@ -430,10 +453,13 @@ pub unsafe extern "C" fn mace_engine_health_json(out: *mut c_char, out_len: usiz
         Err(_) => [0; 4],
     };
 
+    let (rule_count, staged_rule_count) = rule_count_for_health();
+
     let h = HealthJson {
         pipeline_running: engine_pipeline_running(),
         rule_source: rule_source_str(),
-        rule_count: rule_count_best_effort(),
+        rule_count,
+        staged_rule_count,
         partition_count: engine_partition_count(),
         ringbuf_capacity_bytes: 512 * 1024,
         maps_memory_bytes_estimated: estimated_map_bytes(),

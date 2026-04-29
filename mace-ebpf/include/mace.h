@@ -126,6 +126,7 @@ int32_t mace_set_log_level(int32_t level);
 
 int32_t mace_allowlist_add_tgid(uint32_t tgid);
 int32_t mace_engine_health_json(char *out, size_t out_len);
+uint64_t mace_engine_staged_rule_count(void);
 
 #ifdef __cplusplus
 } // extern "C"

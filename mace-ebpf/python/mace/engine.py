@@ -51,6 +51,13 @@ def allowlist_add_tgid(tgid: int) -> None:
         raise RuntimeError(f"mace_allowlist_add_tgid failed for tgid={tgid}")
 
 
+def engine_staged_rule_count() -> int:
+    lib = get_lib()
+    lib.mace_engine_staged_rule_count.argtypes = ()
+    lib.mace_engine_staged_rule_count.restype = ctypes.c_uint64
+    return int(lib.mace_engine_staged_rule_count())
+
+
 def engine_health_json(buf_size: int = 8192) -> str:
     lib = get_lib()
     lib.mace_engine_health_json.argtypes = (ctypes.c_char_p, c_size_t)

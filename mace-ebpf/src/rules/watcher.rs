@@ -58,7 +58,10 @@ impl RuleWatcher {
                             Ok(new_rules) => {
                                 precompiled_for_thread
                                     .store(Arc::new(build_precompiled_map(&new_rules)));
-                                rules_for_thread.store(Arc::new(new_rules));
+                                rules_for_thread.store(Arc::new(new_rules.clone()));
+                                crate::engine_stage::record_staged_rule_count(
+                                    new_rules.rules.len(),
+                                );
                                 crate::audit::record(
                                     "rules_hot_reload",
                                     &format!("path={}", path.display()),

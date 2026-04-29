@@ -32,7 +32,7 @@ The agent uses **logrus** with **`JSONFormatter`** or **`TextFormatter`** writin
 | Command | Purpose |
 |---------|---------|
 | **`mace-agent run --config /path/config.yaml`** | Run the agent (default when **`--config`** is passed without a subcommand). |
-| **`mace-agent status --config /path/config.yaml`** | Print **`mace_engine_health_json`** (pipeline state, rule count estimate, kernel counters) to stdout. Does **not** start the sensor; loads rules for accurate **`rule_count`**. |
+| **`mace-agent status --config /path/config.yaml`** | Print **`mace_engine_health_json`** (pipeline state, rule counts, kernel counters) to stdout. Does **not** start the sensor. **`rule_count`** prefers the in-memory staged count from the last successful **`LoadRules`** / **`LoadRulesFile`** (or hot-reload); **`staged_rule_count`** is always that value; **`mace_engine_staged_rule_count()`** returns it without parsing YAML. |
 
 ### Example (matches `packaging/config.yaml`)
 
