@@ -44,6 +44,7 @@ COPY mace-ebpf-common mace-ebpf-common
 COPY mace-ebpf-ebpf mace-ebpf-ebpf
 COPY mace-ebpf mace-ebpf
 COPY mace-ebpf-loader mace-ebpf-loader
+COPY mace-replay mace-replay
 
 RUN cargo build --release -p mace-ebpf
 

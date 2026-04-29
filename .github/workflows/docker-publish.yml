@@ -23,6 +23,7 @@ on:
       - "mace-ebpf-common/**"
       - "mace-ebpf-ebpf/**"
       - "mace-ebpf-loader/**"
+      - "mace-replay/**"
       - "clients/go/**"
       - "packaging/**"
 
