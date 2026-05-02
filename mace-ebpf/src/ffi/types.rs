@@ -54,6 +54,12 @@ impl From<&MemoryEvent> for RawMemoryEvent {
                 args[1] = event.len;
                 MemorySyscall::Execve as u32
             }
+            EventType::Execveat => {
+                args[0] = event.flags;
+                args[1] = event.addr;
+                args[2] = event.len;
+                MemorySyscall::Execveat as u32
+            }
             EventType::Openat => {
                 args[0] = event.flags;
                 args[1] = event.addr;

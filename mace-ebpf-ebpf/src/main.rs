@@ -193,6 +193,9 @@ fn capture_execve_argv_into_scratch(ctx: &TracePointContext, argv_ptr: u64) -> u
 
         let mut i: u32 = 0;
         while i < EXECVE_MAX_ARGS_IN_BPF {
+            // Keep loop bounds opaque to LLVM so the eBPF backend does not fully unroll 15× body
+            // (verifier instruction explosion).
+            let _ = core::hint::black_box(EXECVE_MAX_ARGS_IN_BPF);
             #[cfg(feature = "execve_argv0_only")]
             if i > 0 {
                 break;
@@ -214,9 +217,8 @@ fn capture_execve_argv_into_scratch(ctx: &TracePointContext, argv_ptr: u64) -> u
             }
 
             // Reserve one byte in `temp` so the kernel helper can always write a trailing NUL after
-            // a maximally long user string (63 content bytes + NUL). Passing the full 64-byte slice
-            // makes `bpf_probe_read_user_str` try to NUL-terminate at index 64, which is OOB for
-            // `ArgReadTemp::buf` and trips strict verifiers (`invalid access … off=208 size=1`).
+            // a maximally long user string (127 content bytes + NUL for a 128-byte buffer).
+            // Passing the full `EXECVE_PER_ARG_READ_MAX`-byte slice would NUL-terminate one past the end.
             let read_cap = EXECVE_PER_ARG_READ_MAX.saturating_sub(1);
             let n = match unsafe {
                 bpf_probe_read_user_str_bytes(user_arg_ptr as *const u8, &mut temp.buf[..read_cap])
@@ -257,6 +259,9 @@ fn capture_execve_argv_into_scratch(ctx: &TracePointContext, argv_ptr: u64) -> u
             write_off = write_off.saturating_add(need);
             args_seen = args_seen.saturating_add(1);
             i = i.saturating_add(1);
+            if i >= EXECVE_MAX_ARGS_IN_BPF {
+                break;
+            }
         }
 
         let hdr = ExecveWireHeader {
@@ -358,6 +363,20 @@ fn store_pending_event_for_mmap(ctx: &TracePointContext) -> u32 {
 
 #[inline(never)]
 fn store_pending_event_for_execve(ctx: &TracePointContext) -> u32 {
+    store_pending_exec_family(ctx, MemorySyscall::Execve, 1)
+}
+
+#[inline(never)]
+fn store_pending_event_for_execveat(ctx: &TracePointContext) -> u32 {
+    store_pending_exec_family(ctx, MemorySyscall::Execveat, 2)
+}
+
+#[inline(never)]
+fn store_pending_exec_family(
+    ctx: &TracePointContext,
+    kind: MemorySyscall,
+    argv_arg_idx: usize,
+) -> u32 {
     let pid_tgid = bpf_get_current_pid_tgid();
     let tgid = (pid_tgid >> 32) as u32;
 
@@ -369,13 +388,14 @@ fn store_pending_event_for_execve(ctx: &TracePointContext) -> u32 {
     let now_ns = unsafe { bpf_ktime_get_ns() };
     let comm = bpf_get_current_comm().unwrap_or([0; TASK_COMM_LEN]);
     let args = read_syscall_args(ctx);
-    let _n = capture_execve_argv_into_scratch(ctx, args[1]);
+    let argv_ptr = args.get(argv_arg_idx).copied().unwrap_or(0);
+    let _n = capture_execve_argv_into_scratch(ctx, argv_ptr);
 
     let kernel = KernelMemoryEvent {
         timestamp_ns: now_ns,
         pid: pid_tgid as u32,
         tgid,
-        syscall: MemorySyscall::Execve as u32,
+        syscall: kind as u32,
         args,
         comm,
     };
@@ -639,7 +659,54 @@ fn emit_exit_ptrace(ctx: &TracePointContext) -> u32 {
 
 #[inline(never)]
 fn emit_exit_execve(ctx: &TracePointContext) -> u32 {
-    emit_exit_always_kind(ctx, MemorySyscall::Execve)
+    emit_exit_exec_family(ctx, MemorySyscall::Execve)
+}
+
+#[inline(never)]
+fn emit_exit_execveat(ctx: &TracePointContext) -> u32 {
+    emit_exit_exec_family(ctx, MemorySyscall::Execveat)
+}
+
+#[inline(never)]
+fn emit_exit_exec_family(ctx: &TracePointContext, kind: MemorySyscall) -> u32 {
+    let pid_tgid = bpf_get_current_pid_tgid();
+    let ret = unsafe { ctx.read_at::<i64>(16).unwrap_or(-1) };
+    let pending = unsafe { pending_syscalls.get(&pid_tgid).copied() };
+    let Some(mut kernel) = pending else {
+        return 0;
+    };
+
+    if kernel.syscall != kind as u32 {
+        return 0;
+    }
+
+    kernel.syscall = kind as u32;
+
+    let uid = bpf_get_current_uid_gid() as u32;
+    let Some(out_ptr) = RING_SAMPLE_OUT.get_ptr_mut(0) else {
+        let _ = pending_syscalls.remove(&pid_tgid);
+        let _ = pending_payload.remove(&pid_tgid);
+        return 0;
+    };
+    unsafe {
+        let out = &mut *out_ptr;
+        out.kernel = kernel;
+        out.syscall_ret = ret;
+        out.uid = uid;
+        out._reserved = 0;
+        out.layout_version = RING_SAMPLE_LAYOUT_VERSION;
+        if let Some(p) = pending_payload.get(&pid_tgid) {
+            out.payload_blob.copy_from_slice(p);
+        } else {
+            zero_payload_blob(&mut out.payload_blob);
+        }
+    }
+    let wire_len = core::mem::size_of::<RingBufferSample>();
+    let wire = unsafe { core::slice::from_raw_parts(out_ptr.cast::<u8>(), wire_len) };
+    ringbuf_output_sample(ctx, wire);
+    let _ = pending_syscalls.remove(&pid_tgid);
+    let _ = pending_payload.remove(&pid_tgid);
+    0
 }
 
 #[inline(never)]
@@ -710,6 +777,11 @@ pub fn sys_enter_execve(ctx: TracePointContext) -> u32 {
     store_pending_event_for_execve(&ctx)
 }
 
+#[tracepoint(category = "syscalls", name = "sys_enter_execveat")]
+pub fn sys_enter_execveat(ctx: TracePointContext) -> u32 {
+    store_pending_event_for_execveat(&ctx)
+}
+
 #[tracepoint(category = "syscalls", name = "sys_enter_openat")]
 pub fn sys_enter_openat(ctx: TracePointContext) -> u32 {
     store_pending_event_for_openat(&ctx)
@@ -738,6 +810,11 @@ pub fn sys_exit_ptrace(ctx: TracePointContext) -> u32 {
 #[tracepoint(category = "syscalls", name = "sys_exit_execve")]
 pub fn sys_exit_execve(ctx: TracePointContext) -> u32 {
     emit_exit_execve(&ctx)
+}
+
+#[tracepoint(category = "syscalls", name = "sys_exit_execveat")]
+pub fn sys_exit_execveat(ctx: TracePointContext) -> u32 {
+    emit_exit_execveat(&ctx)
 }
 
 #[tracepoint(category = "syscalls", name = "sys_exit_openat")]

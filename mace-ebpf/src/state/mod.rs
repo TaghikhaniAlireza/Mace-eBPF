@@ -152,6 +152,7 @@ fn event_type_matches_syscall(ty: EventType, syscall: &str) -> bool {
         EventType::Ptrace => "ptrace",
         EventType::Execve => "execve",
         EventType::Openat => "openat",
+        EventType::Execveat => "execveat",
     };
     name.eq_ignore_ascii_case(syscall)
 }

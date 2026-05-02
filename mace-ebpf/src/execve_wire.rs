@@ -1,5 +1,5 @@
-//! Execve argv wire format (ring buffer layout v11): NUL-separated arguments captured in eBPF
-//! at `sys_enter_execve`, parsed in userspace without relying on `/proc/<pid>/cmdline`.
+//! Execve argv wire format (ring buffer layout v11+): NUL-separated arguments captured in eBPF
+//! at `sys_enter_execve` / `sys_enter_execveat`, parsed in userspace without relying on `/proc/<pid>/cmdline`.
 
 pub use mace_ebpf_common::parse_execve_argv_from_payload;
 

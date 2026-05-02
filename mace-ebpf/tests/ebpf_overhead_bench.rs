@@ -14,7 +14,7 @@
 //! ```
 //!
 //! **Default gate:** multiplicative slowdown `ebpf_avg_ns_per_syscall / baseline_avg_ns_per_syscall`
-//! must be ≤ `3.0` (eBPF may add substantial cost with eight programs + maps; absolute sub‑µs caps
+//! must be ≤ `3.0` (eBPF may add substantial cost with many programs + maps; absolute sub‑µs caps
 //! are not realistic in debug builds). Override with `MACE_MPROTECT_SLOWDOWN_MAX`.
 //!
 //! Optional **absolute** ceiling on extra ns/syscall (`ebpf − baseline`); when set, the test also
@@ -39,12 +39,14 @@ const SYSCALL_TRACEPOINTS: &[(&str, &str)] = &[
     ("sys_enter_memfd_create", "sys_enter_memfd_create"),
     ("sys_enter_ptrace", "sys_enter_ptrace"),
     ("sys_enter_execve", "sys_enter_execve"),
+    ("sys_enter_execveat", "sys_enter_execveat"),
     ("sys_enter_openat", "sys_enter_openat"),
     ("sys_exit_mmap", "sys_exit_mmap"),
     ("sys_exit_mprotect", "sys_exit_mprotect"),
     ("sys_exit_memfd_create", "sys_exit_memfd_create"),
     ("sys_exit_ptrace", "sys_exit_ptrace"),
     ("sys_exit_execve", "sys_exit_execve"),
+    ("sys_exit_execveat", "sys_exit_execveat"),
     ("sys_exit_openat", "sys_exit_openat"),
 ];
 

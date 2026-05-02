@@ -21,12 +21,14 @@ const SYSCALL_TRACEPOINTS: &[(&str, &str)] = &[
     ("sys_enter_memfd_create", "sys_enter_memfd_create"),
     ("sys_enter_ptrace", "sys_enter_ptrace"),
     ("sys_enter_execve", "sys_enter_execve"),
+    ("sys_enter_execveat", "sys_enter_execveat"),
     ("sys_enter_openat", "sys_enter_openat"),
     ("sys_exit_mmap", "sys_exit_mmap"),
     ("sys_exit_mprotect", "sys_exit_mprotect"),
     ("sys_exit_memfd_create", "sys_exit_memfd_create"),
     ("sys_exit_ptrace", "sys_exit_ptrace"),
     ("sys_exit_execve", "sys_exit_execve"),
+    ("sys_exit_execveat", "sys_exit_execveat"),
     ("sys_exit_openat", "sys_exit_openat"),
 ];
 

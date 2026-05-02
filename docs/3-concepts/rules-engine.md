@@ -111,16 +111,17 @@ Each rule may set **`conditions.syscall`** to one of:
 | `mprotect` | Memory protection changes; emitted when the event represents an executable transition (WX-style path in the pipeline) |
 | `memfd_create` | Anonymous file descriptors |
 | `ptrace` | `ptrace` syscall |
-| `execve` | Program execution |
+| `execve` | Program execution via `execve` |
+| `execveat` | Program execution via `execveat` (same argv wire and haystack as `execve`) |
 | `openat` | File opens via `openat` |
 
 Matching is case-insensitive for the syscall string.
 
 ## Command-line / argv context
 
-**Default build:** the eBPF program does **not** read user argv at `sys_enter_execve` (verifier-friendly); **`execve_cmdline`** in events is usually empty and rules rely on **`/proc/<tgid>/cmdline`** (and **`cmdline_context`**) for substring / regex matching.
+**Default build:** the eBPF program does **not** read user argv at **`sys_enter_execve`** or **`sys_enter_execveat`** (verifier-friendly); **`execve_cmdline`** in events is usually empty and rules rely on **`/proc/<tgid>/cmdline`** (and **`cmdline_context`**) for substring / regex matching.
 
-**Full kernel capture:** when built with **`MACE_EBPF_EXECVE_FULL_ARGV=1`**, the kernel probe captures **`execve` argv at syscall entry** (ring layout **v13**): up to **4** arguments, each up to **63** bytes of string data per `bpf_probe_read_user_str_bytes` (64-byte temp, helper uses 63-byte destination so NUL fits), packed into a **192-byte** NUL-separated blob with an `ExecveWireHeader` (`args_count`, `args_len`, `is_truncated`). This removes the **TOCTOU** gap where userspace-only `/proc/<pid>/cmdline` reads could disagree with the syscall-time image.
+**Full kernel capture:** when built with **`MACE_EBPF_EXECVE_FULL_ARGV=1`**, the kernel probe captures **argv at syscall entry** for both **`execve`** and **`execveat`** (ring layout **v14**): up to **15** arguments, each up to **127** bytes of string data per `bpf_probe_read_user_str_bytes` (128-byte temp, helper uses 127-byte destination so NUL fits), packed into an **800-byte** NUL-separated blob after `ExecveWireHeader` (`args_count`, `args_len`, `is_truncated`). This removes the **TOCTOU** gap where userspace-only `/proc/<pid>/cmdline` reads could disagree with the syscall-time image.
 
 When **`execve_argv_truncated`** is true or the haystack is incomplete, rules that need **full** user text should rely on **`cmdline_contains_any`** / **`argv_contains`** (which consult the pipeline haystack: eBPF snapshot → **`cmdline_context`** → **`/proc/<tgid>/cmdline`**) understanding that the `/proc` path is best-effort after exec for very long commands.
 

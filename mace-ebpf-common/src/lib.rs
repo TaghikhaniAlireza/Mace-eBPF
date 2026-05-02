@@ -28,7 +28,9 @@ pub const SYSCALL_ARG_COUNT: usize = 6;
 /// instruction complexity on strict kernels; bump `RING_SAMPLE_LAYOUT_VERSION` when wire changes.
 /// v13: **minimal argv capture** for maximum verifier/kernel compatibility: **4** argv slots,
 /// **64** bytes per `bpf_probe_read_user_str_bytes`, **192**-byte total argv blob after header.
-pub const RING_SAMPLE_LAYOUT_VERSION: u32 = 13;
+/// v14: **expanded argv capture**: **15** argv slots, **128**-byte per-arg buffer (**127**-byte
+/// read slice + NUL), **800**-byte argv blob; `RING_PAYLOAD_BLOB_LEN` **1024**; adds **`execveat`** syscall id.
+pub const RING_SAMPLE_LAYOUT_VERSION: u32 = 14;
 
 /// Max bytes for `openat` pathname snapshot in BPF (including NUL).
 pub const OPENAT_PATH_MAX_LEN: usize = 64;
@@ -37,7 +39,7 @@ pub const OPENAT_PATH_MAX_LEN: usize = 64;
 pub const EXECVE_SCRATCH_LEN: usize = 256;
 
 /// Max argv bytes packed after [`ExecveWireHeader`] inside `RingBufferSample::payload_blob` for execve (v11+).
-pub const EXECVE_ARG_BLOB_LEN: usize = 192;
+pub const EXECVE_ARG_BLOB_LEN: usize = 800;
 
 /// Packed metadata written by eBPF at the start of the execve payload (v11+).
 #[repr(C)]
@@ -62,13 +64,13 @@ impl ExecveWireHeader {
 pub const EXECVE_ARGV_MAX_ARGS: u32 = EXECVE_MAX_ARGS_IN_BPF;
 
 /// Maximum argv entries read in eBPF (verifier-bounded loop; lower = smaller program).
-pub const EXECVE_MAX_ARGS_IN_BPF: u32 = 4;
+pub const EXECVE_MAX_ARGS_IN_BPF: u32 = 15;
 
 /// Max bytes read per argv string in one `bpf_probe_read_user_str_bytes` call (stack / insn tradeoff).
 /// The eBPF program passes `this - 1` as the destination length so the helper can always write a
 /// trailing NUL inside the per-CPU read buffer without an out-of-bounds store at index
 /// `EXECVE_PER_ARG_READ_MAX`.
-pub const EXECVE_PER_ARG_READ_MAX: usize = 64;
+pub const EXECVE_PER_ARG_READ_MAX: usize = 128;
 
 /// Retained name: upper bound for single-string decode paths (memfd); not the full v11 exec blob.
 pub const EXECVE_ARG_STR_MAX: usize = EXECVE_SCRATCH_LEN;
@@ -116,6 +118,7 @@ pub enum MemorySyscall {
     Ptrace = 4,
     Execve = 5,
     Openat = 6,
+    Execveat = 7,
 }
 
 impl MemorySyscall {
@@ -127,6 +130,7 @@ impl MemorySyscall {
             4 => Some(Self::Ptrace),
             5 => Some(Self::Execve),
             6 => Some(Self::Openat),
+            7 => Some(Self::Execveat),
             _ => None,
         }
     }
@@ -139,6 +143,7 @@ impl MemorySyscall {
             Self::Ptrace => "ptrace",
             Self::Execve => "execve",
             Self::Openat => "openat",
+            Self::Execveat => "execveat",
         }
     }
 }
@@ -179,6 +184,7 @@ pub enum EventType {
     Ptrace = 3,
     Execve = 4,
     Openat = 5,
+    Execveat = 6,
 }
 
 impl EventType {
@@ -190,6 +196,7 @@ impl EventType {
             4 => Some(Self::Ptrace),
             5 => Some(Self::Execve),
             6 => Some(Self::Openat),
+            7 => Some(Self::Execveat),
             _ => None,
         }
     }
@@ -212,7 +219,7 @@ pub struct MemoryEvent {
     pub len: u64,
     pub flags: u64,
     pub ret: i64,
-    /// Joined argv snapshot for `execve` (from eBPF user-memory reads); empty for other syscalls.
+    /// Joined argv snapshot for `execve` / `execveat` (from eBPF user-memory reads); empty for other syscalls.
     pub execve_cmdline: alloc::string::String,
     /// Path captured in-kernel at `sys_enter_openat` (empty when not `openat`).
     pub openat_path: alloc::string::String,
@@ -258,13 +265,14 @@ impl MemoryEvent {
             EventType::MemfdCreate => (raw.args[0], 0, raw.args[1], syscall_ret),
             // ptrace: request = args[0], target pid = args[1], data ptr = args[2]
             EventType::Ptrace => (raw.args[2], raw.args[1], raw.args[0], syscall_ret),
-            // execve: filename userspace pointer, argv pointer (userspace rules may read /proc/pid/cmdline)
+            // execve: filename, argv; execveat: dirfd, pathname, argv
             EventType::Execve => (raw.args[0], raw.args[1], 0, syscall_ret),
+            EventType::Execveat => (raw.args[1], raw.args[2], raw.args[0], syscall_ret),
             // openat: dfd, pathname user pointer, flags; fd returned on exit (stored in raw by userspace bridge if needed)
             EventType::Openat => (raw.args[1], raw.args[2], raw.args[0], syscall_ret),
         };
 
-        let execve_cmdline = if event_type == EventType::Execve {
+        let execve_cmdline = if matches!(event_type, EventType::Execve | EventType::Execveat) {
             if layout_version >= 11 {
                 if let Some(b) = payload_blob.as_ref()
                     && b.len() >= EXECVE_WIRE_HEADER_LEN
@@ -419,7 +427,7 @@ mod tests {
 
     // --- MemorySyscall ---
 
-    /// Validates that `MemorySyscall::from_u32` accepts syscall ids 1–6 and maps them to the expected variants.
+    /// Validates that `MemorySyscall::from_u32` accepts syscall ids 1–7 and maps them to the expected variants.
     #[test]
     fn memory_syscall_from_u32_valid_ids() {
         assert_eq!(MemorySyscall::from_u32(1), Some(MemorySyscall::Mmap));
@@ -428,13 +436,14 @@ mod tests {
         assert_eq!(MemorySyscall::from_u32(4), Some(MemorySyscall::Ptrace));
         assert_eq!(MemorySyscall::from_u32(5), Some(MemorySyscall::Execve));
         assert_eq!(MemorySyscall::from_u32(6), Some(MemorySyscall::Openat));
+        assert_eq!(MemorySyscall::from_u32(7), Some(MemorySyscall::Execveat));
     }
 
-    /// Validates that `MemorySyscall::from_u32` returns `None` for out-of-range ids (0, 7, u32::MAX).
+    /// Validates that `MemorySyscall::from_u32` returns `None` for out-of-range ids (0, 8, u32::MAX).
     #[test]
     fn memory_syscall_from_u32_invalid_ids() {
         assert_eq!(MemorySyscall::from_u32(0), None);
-        assert_eq!(MemorySyscall::from_u32(7), None);
+        assert_eq!(MemorySyscall::from_u32(8), None);
         assert_eq!(MemorySyscall::from_u32(u32::MAX), None);
     }
 
@@ -447,11 +456,12 @@ mod tests {
         assert_eq!(MemorySyscall::Ptrace.as_str(), "ptrace");
         assert_eq!(MemorySyscall::Execve.as_str(), "execve");
         assert_eq!(MemorySyscall::Openat.as_str(), "openat");
+        assert_eq!(MemorySyscall::Execveat.as_str(), "execveat");
     }
 
     // --- EventType ---
 
-    /// Validates that `EventType::from_syscall` maps raw syscall ids 1–6 to the high-level event kinds used in userspace.
+    /// Validates that `EventType::from_syscall` maps raw syscall ids 1–7 to the high-level event kinds used in userspace.
     #[test]
     fn event_type_from_syscall_valid() {
         assert_eq!(EventType::from_syscall(1), Some(EventType::Mmap));
@@ -460,13 +470,14 @@ mod tests {
         assert_eq!(EventType::from_syscall(4), Some(EventType::Ptrace));
         assert_eq!(EventType::from_syscall(5), Some(EventType::Execve));
         assert_eq!(EventType::from_syscall(6), Some(EventType::Openat));
+        assert_eq!(EventType::from_syscall(7), Some(EventType::Execveat));
     }
 
     /// Validates that `EventType::from_syscall` returns `None` for unknown syscall ids.
     #[test]
     fn event_type_from_syscall_invalid() {
         assert_eq!(EventType::from_syscall(0), None);
-        assert_eq!(EventType::from_syscall(7), None);
+        assert_eq!(EventType::from_syscall(8), None);
         assert_eq!(EventType::from_syscall(u32::MAX), None);
     }
 
@@ -698,6 +709,56 @@ mod tests {
             assert_eq!(ev.uid, 0);
             assert_eq!(ev.execve_cmdline, "/bin/sh -c whoami");
             assert!(!ev.execve_argv_truncated);
+        }
+
+        /// Execveat: same argv wire as execve; `addr`/`len` map to pathname and argv from raw args.
+        #[test]
+        fn memory_event_from_ring_sample_execveat_argv_and_uid() {
+            let mut payload = [0u8; RING_PAYLOAD_BLOB_LEN];
+            let argv = b"/bin/true\0\0";
+            let hdr = super::ExecveWireHeader {
+                pid: 11,
+                args_count: 1,
+                args_len: argv.len() as u32,
+                is_truncated: 0,
+            };
+            unsafe {
+                core::ptr::write_unaligned(payload.as_mut_ptr().cast(), hdr);
+            }
+            let base = super::EXECVE_WIRE_HEADER_LEN;
+            payload[base..base + argv.len()].copy_from_slice(argv);
+
+            let kernel = KernelMemoryEvent {
+                timestamp_ns: 2,
+                pid: 11,
+                tgid: 11,
+                syscall: 7,
+                args: [3, 0x3333, 0x4444, 0, 0, 0],
+                comm: *b"at\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+            };
+            let sample = RingBufferSample {
+                kernel,
+                syscall_ret: 0,
+                uid: 1000,
+                _reserved: 0,
+                layout_version: RING_SAMPLE_LAYOUT_VERSION,
+                payload_blob: payload,
+            };
+            let mut bytes = [0u8; RingBufferSample::wire_size()];
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    (&sample as *const RingBufferSample).cast::<u8>(),
+                    bytes.as_mut_ptr(),
+                    bytes.len(),
+                );
+            }
+            let ev = MemoryEvent::from_bytes(&bytes).expect("ring sample execveat");
+            assert_eq!(ev.event_type, EventType::Execveat);
+            assert_eq!(ev.uid, 1000);
+            assert_eq!(ev.addr, 0x3333);
+            assert_eq!(ev.len, 0x4444);
+            assert_eq!(ev.flags, 3);
+            assert_eq!(ev.execve_cmdline, "/bin/true");
         }
 
         /// v11: long single argv with tail marker (truncation flag set).
