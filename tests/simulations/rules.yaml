@@ -106,6 +106,244 @@ rules:
       syscall: "memfd_create"
       memfd_name_pattern: "kworker|mace_sim"
 
+  # ---------------------------------------------------------------------------
+  # GTFOBins-style & interpreter abuse (execve haystack: eBPF argv + /proc cmdline)
+  # Paths like /path/to/* and string DATA are placeholders — patterns avoid hard-coding them.
+  # ---------------------------------------------------------------------------
+
+  - id: "SIM_GDB_SHELL_BREAKOUT_EX"
+    name: "gdb scripted shell breakout (-ex '!…')"
+    severity: "high"
+    description: >
+      Detects gdb launched with -ex invoking a host shell via the classic '!/' command
+      injection pattern (non-interactive scripted abuse, not normal TUI debugging).
+    tags: ["gtfobins", "gdb", "execution", "defense-evasion"]
+    mitre_tactics: ["Execution", "Defense Evasion"]
+    mitre_techniques: ["T1059", "T1202"]
+    references:
+      - "https://gtfobins.org/gtfobins/gdb/"
+      - "https://attack.mitre.org/techniques/T1202/"
+    conditions:
+      syscall: "execve"
+      process_name_pattern: "^gdb$"
+      cmdline_context_pattern: '(?i)\bgdb\b.*-ex\s+[''"][^''"]*!/'
+      argv_contains:
+        - "-ex"
+
+  - id: "SIM_GDB_PYTHON_SETUID_SHELL"
+    name: "gdb Python one-liner privilege change then shell"
+    severity: "critical"
+    description: >
+      gdb -ex 'python …' chaining os.setuid (or seteuid) with a shell spawn is a known
+      GTFOBins-style priv-esc pattern; distinct from benign python pretty-printing.
+    tags: ["gtfobins", "gdb", "privilege-escalation", "execution"]
+    mitre_tactics: ["Privilege Escalation", "Execution"]
+    mitre_techniques: ["T1059", "T1548.001"]
+    references:
+      - "https://gtfobins.org/gtfobins/gdb/"
+      - "https://attack.mitre.org/techniques/T1548/001/"
+    conditions:
+      syscall: "execve"
+      process_name_pattern: "^gdb$"
+      cmdline_context_pattern: '(?i)-ex\s+[''"][^''"]*python[^''"]*(setuid|seteuid|setresuid)\s*\('
+      argv_contains:
+        - "python"
+        - "/bin/sh"
+
+  - id: "SIM_GDB_DUMP_VALUE_TO_FILE"
+    name: "gdb scripted memory dump to path (dump value)"
+    severity: "high"
+    description: >
+      Scripted gdb that uses 'dump value' to write process memory or evaluated data to a
+      filesystem path — common in post-exploitation / credential harvesting workflows.
+    tags: ["gtfobins", "gdb", "collection", "credential-access"]
+    mitre_tactics: ["Collection", "Credential Access"]
+    mitre_techniques: ["T1003", "T1552.001"]
+    references:
+      - "https://gtfobins.org/gtfobins/gdb/"
+      - "https://attack.mitre.org/techniques/T1003/"
+    conditions:
+      syscall: "execve"
+      process_name_pattern: "^gdb$"
+      argv_contains:
+        - "dump value"
+        - "-ex"
+
+  - id: "SIM_GZIP_PIPE_SELF_DECODE"
+    name: "gzip compress-to-stdout piped into gzip decompress (obfuscation chain)"
+    severity: "medium"
+    description: >
+      Piping `gzip -c` output into `gzip -d` is an unusual self-referential transform often
+      used to hide payloads in transit or logs; not proof of malice alone but useful in hunts.
+    tags: ["gtfobins", "gzip", "defense-evasion"]
+    mitre_tactics: ["Defense Evasion"]
+    mitre_techniques: ["T1027", "T1140"]
+    references:
+      - "https://gtfobins.org/gtfobins/gzip/"
+      - "https://attack.mitre.org/techniques/T1027/"
+    conditions:
+      syscall: "execve"
+      process_name_pattern: "^gzip$"
+      cmdline_contains_any:
+        - "gzip -c"
+      argv_contains:
+        - "|"
+        - "gzip -d"
+
+  - id: "SIM_NODE_CHILD_PROCESS_SHELL"
+    name: "Node.js child_process spawning interactive shell"
+    severity: "high"
+    description: >
+      Node one-liner loading child_process and spawning /bin/sh with stdio wired to the
+      parent — consistent with GTFOBins-style execution and reverse-shell staging.
+    tags: ["gtfobins", "nodejs", "execution"]
+    mitre_tactics: ["Execution"]
+    mitre_techniques: ["T1059.007", "T1218"]
+    references:
+      - "https://gtfobins.org/gtfobins/node/"
+      - "https://attack.mitre.org/techniques/T1059/007/"
+    conditions:
+      syscall: "execve"
+      process_name_pattern: "^node$"
+      argv_contains:
+        - "child_process"
+        - "/bin/sh"
+
+  - id: "SIM_NODE_SETUID_THEN_SHELL"
+    name: "Node.js setuid/seteuid then child_process shell"
+    severity: "critical"
+    description: >
+      Dropping privileges or attempting uid manipulation via process.setuid before spawning
+      a shell from Node is high-signal for abuse tooling rather than typical app servers.
+    tags: ["nodejs", "privilege-escalation", "execution"]
+    mitre_tactics: ["Privilege Escalation", "Execution"]
+    mitre_techniques: ["T1059.007", "T1548.001"]
+    references:
+      - "https://attack.mitre.org/techniques/T1548/001/"
+    conditions:
+      syscall: "execve"
+      process_name_pattern: "^node$"
+      argv_contains:
+        - "setuid"
+        - "child_process"
+        - "/bin/sh"
+
+  - id: "SIM_NODE_REVERSE_SHELL_JS_PATTERN"
+    name: "Node.js reverse shell wiring (net + child_process + pipe)"
+    severity: "critical"
+    description: >
+      Detects the common JS one-liner: spawn a shell, open a TCP client, and pipe sockets
+      to shell stdio. Uses ordered-independent substrings on the full cmdline haystack (not a fixed C2 host).
+    tags: ["nodejs", "command-and-control", "execution"]
+    mitre_tactics: ["Command and Control", "Execution"]
+    mitre_techniques: ["T1059.007", "T1071.001"]
+    references:
+      - "https://attack.mitre.org/techniques/T1071/001/"
+    conditions:
+      syscall: "execve"
+      process_name_pattern: "^node$"
+      cmdline_contains_any:
+        - 'require("net")'
+        - "require('net')"
+      argv_contains:
+        - "child_process"
+        - ".connect("
+        - "spawn("
+        - "/bin/sh"
+        - ".pipe("
+
+  - id: "SIM_NETCAT_LISTENER_EXEC"
+    name: "netcat classic listen bind (-l -p)"
+    severity: "medium"
+    description: >
+      Execution of nc/netcat with listen and port bind flags — common staging for reverse
+      shells or ad-hoc data exfil; tune process_name_pattern for your nc alternatives (ncat, …).
+    tags: ["netcat", "command-and-control", "network"]
+    mitre_tactics: ["Command and Control"]
+    mitre_techniques: ["T1090", "T1071.001"]
+    references:
+      - "https://attack.mitre.org/techniques/T1090/"
+    conditions:
+      syscall: "execve"
+      process_name_pattern: "^(nc|netcat|ncat)$"
+      argv_contains:
+        - "-l"
+        - "-p"
+
+  - id: "SIM_NODE_FS_WRITE_SYNC"
+    name: "Node.js writeFileSync one-liner (arbitrary file write)"
+    severity: "high"
+    description: >
+      In-memory one-liner using fs.writeFileSync — often used to drop webshells, cron
+      entries, or SSH keys; path substrings are attacker-specific; this rule keys on API abuse.
+    tags: ["nodejs", "impact"]
+    mitre_tactics: ["Impact"]
+    mitre_techniques: ["T1485", "T1546.004"]
+    references:
+      - "https://attack.mitre.org/techniques/T1485/"
+    conditions:
+      syscall: "execve"
+      process_name_pattern: "^node$"
+      argv_contains:
+        - "writeFileSync"
+        - "fs"
+
+  - id: "SIM_NODE_FS_READ_SYNC_STDOUT"
+    name: "Node.js readFileSync piped to stdout (bulk file read)"
+    severity: "medium"
+    description: >
+      Exfil-style read of a file path via readFileSync with stdout.write — useful when
+      combined with other alerts or parent process context.
+    tags: ["nodejs", "collection"]
+    mitre_tactics: ["Collection"]
+    mitre_techniques: ["T1005"]
+    references:
+      - "https://attack.mitre.org/techniques/T1005/"
+    conditions:
+      syscall: "execve"
+      process_name_pattern: "^node$"
+      argv_contains:
+        - "readFileSync"
+        - "stdout.write"
+
+  - id: "SIM_NODE_HTTP_UPLOAD_STREAM"
+    name: "Node.js HTTP upload (read stream piped to request)"
+    severity: "high"
+    description: >
+      createReadStream from disk piped into http(s).request — scripted exfil over HTTP without curl/wget.
+    tags: ["nodejs", "exfiltration", "command-and-control"]
+    mitre_tactics: ["Exfiltration", "Command and Control"]
+    mitre_techniques: ["T1048.003", "T1071.001"]
+    references:
+      - "https://attack.mitre.org/techniques/T1048/003/"
+    conditions:
+      syscall: "execve"
+      process_name_pattern: "^node$"
+      argv_contains:
+        - "createReadStream"
+        - "http"
+        - "pipe("
+
+  - id: "SIM_NODE_HTTP_DOWNLOAD_STREAM"
+    name: "Node.js HTTP download (response piped to write stream)"
+    severity: "high"
+    description: >
+      http(s).get with response piped to createWriteStream — scripted download-to-disk from a URL.
+    tags: ["nodejs", "command-and-control"]
+    mitre_tactics: ["Command and Control", "Ingress Tool Transfer"]
+    mitre_techniques: ["T1105", "T1071.001"]
+    references:
+      - "https://attack.mitre.org/techniques/T1105/"
+    conditions:
+      syscall: "execve"
+      process_name_pattern: "^node$"
+      argv_contains:
+        - "createWriteStream"
+        - "pipe("
+      cmdline_contains_any:
+        - "http.get"
+        - "https.get"
+
 # ------------------------------------------------------------------------------
 # Suppressions: trusted / high-volume benign patterns (adjust for your fleet).
 # When both a rule and a suppression match, alerts are skipped but matched_rules
