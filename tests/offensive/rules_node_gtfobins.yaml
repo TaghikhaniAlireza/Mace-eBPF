@@ -1,0 +1,25 @@
+# Offensive test: GTFOBins-style Node.js shell invocation (child_process → /bin/sh)
+# Pair with: tests/offensive/gtfobins_node_shell.sh
+# Reference: https://gtfobins.org/gtfobins/node/
+
+rules:
+  - id: "OFFENSE_GTFONODE_CHILD_PROCESS_SHELL"
+    name: "GTFOBins node child_process shell invocation"
+    severity: "high"
+    description: >
+      Detects execve where the captured argv/cmdline haystack shows Node loading
+      child_process and spawning /bin/sh — consistent with GTFOBins-style abuse
+      (non-interactive lab simulation uses spawnSync + exit 0).
+    tags: ["offensive-simulation", "gtfobins", "nodejs", "execution"]
+    mitre_tactics: ["Execution"]
+    mitre_techniques: ["T1059.007", "T1218"]
+    references:
+      - "https://gtfobins.org/gtfobins/node/"
+      - "https://attack.mitre.org/techniques/T1059/007/"
+      - "https://attack.mitre.org/techniques/T1218/"
+    conditions:
+      syscall: "execve"
+      argv_contains:
+        - "child_process"
+        - "spawnSync"
+        - "/bin/sh"

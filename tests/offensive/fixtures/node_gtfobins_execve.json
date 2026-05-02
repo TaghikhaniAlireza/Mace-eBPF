@@ -1,0 +1,18 @@
+[
+  {
+    "timestamp_ns": 1,
+    "tgid": 4242,
+    "pid": 4242,
+    "uid": 1000,
+    "comm": [110, 111, 100, 101, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    "event_type": "Execve",
+    "addr": 0,
+    "len": 0,
+    "flags": 0,
+    "ret": 0,
+    "execve_cmdline": "node -e const cp = require('child_process'); cp.spawnSync('/bin/sh', ['-c', 'exit 0'], {stdio: 'ignore'})",
+    "openat_path": "",
+    "memfd_name": "",
+    "execve_argv_truncated": false
+  }
+]
