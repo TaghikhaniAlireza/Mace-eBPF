@@ -41,6 +41,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  MACE_EBPF_EXECVE_FULL_ARGV: "1"
 
 jobs:
   ebpf-matrix:

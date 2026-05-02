@@ -1,0 +1,13 @@
+# Example `mace-agent` config when exercising `tests/simulations/rules.yaml`.
+# From the repository root:
+#   sudo RUST_LOG=info ./build/mace-agent run --config tests/simulations/mace-agent.example.yaml
+#
+# Do not pass `rules.yaml` alone as `--config` — that file contains only `rules:` / `suppressions:`,
+# while the agent requires `logging.path` and `rules.path` (see clients/go/internal/agentconfig).
+
+logging:
+  path: /tmp/mace-simulations.log
+  format: json
+
+rules:
+  path: tests/simulations/rules.yaml

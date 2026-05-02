@@ -81,6 +81,8 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # CI runners accept full in-kernel execve argv capture; default `build.rs` uses no-user for strict hosts.
+  MACE_EBPF_EXECVE_FULL_ARGV: "1"
 
 jobs:
   lint-and-audit:

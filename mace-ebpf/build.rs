@@ -117,36 +117,67 @@ fn main() -> anyhow::Result<()> {
         manifest_path,
         ..
     } = ebpf_package;
+    println!("cargo:rerun-if-env-changed=MACE_EBPF_EXECVE_FULL_ARGV");
     println!("cargo:rerun-if-env-changed=MACE_EBPF_EXECVE_ARGV0_ONLY");
     println!("cargo:rerun-if-env-changed=MACE_EBPF_EXECVE_NO_USER_ARGV");
 
+    let truthy = |v: &std::ffi::OsStr| {
+        v == "1"
+            || v.eq_ignore_ascii_case("true")
+            || v.eq_ignore_ascii_case("yes")
+            || v.eq_ignore_ascii_case("on")
+    };
+
+    let full_argv = env::var_os("MACE_EBPF_EXECVE_FULL_ARGV")
+        .as_deref()
+        .map(truthy)
+        .unwrap_or(false);
     let argv0_only = env::var_os("MACE_EBPF_EXECVE_ARGV0_ONLY")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("yes"))
+        .as_deref()
+        .map(truthy)
         .unwrap_or(false);
     let no_user_argv = env::var_os("MACE_EBPF_EXECVE_NO_USER_ARGV")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("yes"))
+        .as_deref()
+        .map(truthy)
         .unwrap_or(false);
 
-    if argv0_only && no_user_argv {
+    if full_argv && (argv0_only || no_user_argv) {
+        println!("cargo:warning=MACE_EBPF_EXECVE_FULL_ARGV is set; ignoring argv0-only / no-user-argv flags");
+    }
+    if argv0_only && no_user_argv && !full_argv {
         println!(
             "cargo:warning=MACE_EBPF_EXECVE_NO_USER_ARGV wins over MACE_EBPF_EXECVE_ARGV0_ONLY"
         );
     }
-    let ebpf_features: &[&str] = if no_user_argv {
+
+    // Default: `execve_no_user_argv` — strict kernels often reject `sys_enter_execve` when it
+    // performs user-memory argv reads; rules still work via `/proc/<tgid>/cmdline` haystack.
+    // Set `MACE_EBPF_EXECVE_FULL_ARGV=1` for full in-kernel argv capture on capable hosts.
+    let ebpf_features: &[&str] = if full_argv {
+        &["ebpf-bin"]
+    } else if no_user_argv {
         &["ebpf-bin", "execve_no_user_argv"]
     } else if argv0_only {
         &["ebpf-bin", "execve_argv0_only"]
     } else {
-        &["ebpf-bin"]
+        &["ebpf-bin", "execve_no_user_argv"]
     };
 
-    if no_user_argv {
+    if full_argv {
+        println!(
+            "cargo:warning=Building eBPF with MACE_EBPF_EXECVE_FULL_ARGV (full execve argv capture in kernel)"
+        );
+    } else if no_user_argv {
         println!(
             "cargo:warning=Building eBPF with MACE_EBPF_EXECVE_NO_USER_ARGV (execve enter skips user argv reads; header-only)"
         );
     } else if argv0_only {
         println!(
             "cargo:warning=Building eBPF with MACE_EBPF_EXECVE_ARGV0_ONLY (execve captures argv[0] only)"
+        );
+    } else {
+        println!(
+            "cargo:warning=Building eBPF with default execve argv policy (no user argv reads). Set MACE_EBPF_EXECVE_FULL_ARGV=1 for full kernel argv capture."
         );
     }
 

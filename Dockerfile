@@ -64,6 +64,8 @@ COPY mace-ebpf mace-ebpf
 COPY mace-ebpf-loader mace-ebpf-loader
 COPY mace-replay mace-replay
 
+# Full in-kernel execve argv capture (CI / image kernels accept this; strict hosts use default build).
+ENV MACE_EBPF_EXECVE_FULL_ARGV=1
 RUN cargo build --release -p mace-ebpf
 
 # CO-RE eBPF object (for inspection / tooling — also embedded in libmace_ebpf.a userspace)

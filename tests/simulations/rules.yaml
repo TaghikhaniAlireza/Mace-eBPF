@@ -1,6 +1,9 @@
 # Validation rules for Phase 2.2 attack simulations (`tests/simulations/attack_simulator.py`).
 # Load this file into the Mace pipeline while the sensor runs as root.
 #
+# Agent config: use `tests/simulations/mace-agent.example.yaml` (do not pass this file as
+# `mace-agent --config` — it is rules-only; the agent needs `logging` + `rules.path`).
+#
 # Layout tip: one file is fine for demos. For production, prefer a directory passed as rules_path —
 # every `*.yaml` / `*.yml` is merged in sorted order (e.g. `10-rules.yaml`, `90-suppressions.yaml`).
 #
@@ -131,11 +134,11 @@ rules:
         - "-ex"
 
   - id: "SIM_GDB_PYTHON_SETUID_SHELL"
-    name: "gdb Python one-liner privilege change then shell"
+    name: "gdb Python one-liner privilege manipulation (setuid family)"
     severity: "critical"
     description: >
-      gdb -ex 'python …' chaining os.setuid (or seteuid) with a shell spawn is a known
-      GTFOBins-style priv-esc pattern; distinct from benign python pretty-printing.
+      gdb -ex 'python …' invoking setuid/seteuid/setresuid is a GTFOBins-style priv-esc staging
+      pattern. Does not require a successful shell spawn (Python may error before `!/bin/sh` runs).
     tags: ["gtfobins", "gdb", "privilege-escalation", "execution"]
     mitre_tactics: ["Privilege Escalation", "Execution"]
     mitre_techniques: ["T1059", "T1548.001"]
@@ -148,7 +151,6 @@ rules:
       cmdline_context_pattern: '(?i)-ex\s+[''"][^''"]*python[^''"]*(setuid|seteuid|setresuid)\s*\('
       argv_contains:
         - "python"
-        - "/bin/sh"
 
   - id: "SIM_GDB_DUMP_VALUE_TO_FILE"
     name: "gdb scripted memory dump to path (dump value)"
