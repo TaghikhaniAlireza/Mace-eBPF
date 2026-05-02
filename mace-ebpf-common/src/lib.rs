@@ -234,12 +234,24 @@ pub struct MemoryEvent {
 #[cfg(feature = "user")]
 impl MemoryEvent {
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        Self::from_bytes_detailed(bytes).0
+    }
+
+    /// Same as [`Self::from_bytes`], but returns an optional human-readable note when argv/header
+    /// parsing needed a fallback or looks inconsistent (for `tracing::warn!` in userspace).
+    pub fn from_bytes_detailed(bytes: &[u8]) -> (Option<Self>, Option<alloc::string::String>) {
         let (raw, syscall_ret, uid, payload_blob, layout_version) =
             if bytes.len() == RingBufferSample::wire_size() {
                 let sample =
                     unsafe { core::ptr::read_unaligned(bytes.as_ptr() as *const RingBufferSample) };
                 if sample.layout_version != 10 && sample.layout_version < 11 {
-                    return None;
+                    return (
+                        None,
+                        Some(alloc::format!(
+                            "unsupported ring layout_version={} (need 10 or >=11)",
+                            sample.layout_version
+                        )),
+                    );
                 }
                 (
                     sample.kernel,
@@ -249,15 +261,36 @@ impl MemoryEvent {
                     sample.layout_version,
                 )
             } else if bytes.len() == core::mem::size_of::<KernelMemoryEvent>() {
-                let raw = KernelMemoryEvent::from_bytes(bytes)?;
+                let Some(raw) = KernelMemoryEvent::from_bytes(bytes) else {
+                    return (
+                        None,
+                        Some(alloc::string::String::from(
+                            "KernelMemoryEvent::from_bytes failed",
+                        )),
+                    );
+                };
                 (raw, 0i64, 0u32, None, 0u32)
             } else {
-                return None;
+                return (
+                    None,
+                    Some(alloc::format!(
+                        "wrong sample length: got {} want {} or {}",
+                        bytes.len(),
+                        RingBufferSample::wire_size(),
+                        core::mem::size_of::<KernelMemoryEvent>()
+                    )),
+                );
             };
 
-        let event_type = EventType::from_syscall(raw.syscall)?;
+        let Some(event_type) = EventType::from_syscall(raw.syscall) else {
+            return (
+                None,
+                Some(alloc::format!("unknown kernel syscall id {}", raw.syscall)),
+            );
+        };
 
         let mut execve_argv_truncated = false;
+        let mut parse_note: Option<alloc::string::String> = None;
 
         let (addr, len, flags, ret) = match event_type {
             EventType::Mmap => (raw.args[0], raw.args[1], raw.args[3], syscall_ret),
@@ -281,10 +314,14 @@ impl MemoryEvent {
                         unsafe { core::ptr::read_unaligned(b.as_ptr().cast::<ExecveWireHeader>()) };
                     execve_argv_truncated = hdr.is_truncated != 0;
                 }
-                payload_blob
+                let (joined, note) = payload_blob
                     .as_ref()
-                    .map(|b| parse_execve_argv_joined_from_payload(b.as_slice()))
-                    .unwrap_or_default()
+                    .map(|b| parse_execve_argv_joined_from_payload_with_note(b.as_slice()))
+                    .unwrap_or((alloc::string::String::new(), None));
+                if let Some(n) = note {
+                    parse_note = Some(n);
+                }
+                joined
             } else {
                 payload_blob
                     .as_ref()
@@ -319,22 +356,25 @@ impl MemoryEvent {
             alloc::string::String::new()
         };
 
-        Some(Self {
-            timestamp_ns: raw.timestamp_ns,
-            tgid: raw.tgid,
-            pid: raw.pid,
-            uid,
-            comm: raw.comm,
-            event_type,
-            addr,
-            len,
-            flags,
-            ret,
-            execve_cmdline,
-            openat_path,
-            memfd_name,
-            execve_argv_truncated,
-        })
+        (
+            Some(Self {
+                timestamp_ns: raw.timestamp_ns,
+                tgid: raw.tgid,
+                pid: raw.pid,
+                uid,
+                comm: raw.comm,
+                event_type,
+                addr,
+                len,
+                flags,
+                ret,
+                execve_cmdline,
+                openat_path,
+                memfd_name,
+                execve_argv_truncated,
+            }),
+            parse_note,
+        )
     }
 }
 
@@ -397,10 +437,9 @@ pub fn parse_execve_argv_from_payload(blob: &[u8]) -> alloc::vec::Vec<alloc::str
 const MAX_JOINED_EXECVE_CMDLINE_BYTES: usize = 16 * 1024;
 
 #[cfg(feature = "user")]
-fn parse_execve_argv_joined_from_payload(blob: &[u8]) -> alloc::string::String {
-    let v = parse_execve_argv_from_payload(blob);
+fn join_argv_segments(parts: &[alloc::string::String]) -> alloc::string::String {
     let mut s = alloc::string::String::new();
-    for part in &v {
+    for part in parts {
         if s.len() >= MAX_JOINED_EXECVE_CMDLINE_BYTES {
             break;
         }
@@ -425,6 +464,114 @@ fn parse_execve_argv_joined_from_payload(blob: &[u8]) -> alloc::string::String {
         }
     }
     s
+}
+
+/// Join argv bytes by NUL into non-empty segments (bounded), for when `ExecveWireHeader.args_count`
+/// does not match the packed blob (eBPF/kernel skew).
+#[cfg(feature = "user")]
+fn join_execve_payload_by_nul_split(data: &[u8]) -> alloc::string::String {
+    let mut s = alloc::string::String::new();
+    let mut emitted = 0usize;
+    for seg in data.split(|&b| b == 0) {
+        if emitted >= EXECVE_MAX_ARGS_IN_BPF as usize {
+            break;
+        }
+        if seg.is_empty() {
+            continue;
+        }
+        emitted = emitted.saturating_add(1);
+        if !s.is_empty() {
+            if s.len() >= MAX_JOINED_EXECVE_CMDLINE_BYTES {
+                break;
+            }
+            s.push(' ');
+        }
+        let room = MAX_JOINED_EXECVE_CMDLINE_BYTES.saturating_sub(s.len());
+        let lossy = alloc::string::String::from_utf8_lossy(seg);
+        let part = lossy.as_ref();
+        if part.len() <= room {
+            s.push_str(part);
+        } else if room > 0 {
+            let cut = part.floor_char_boundary(room);
+            s.push_str(&part[..cut]);
+            break;
+        } else {
+            break;
+        }
+    }
+    s
+}
+
+#[cfg(feature = "user")]
+fn parse_execve_argv_joined_from_payload_with_note(
+    blob: &[u8],
+) -> (alloc::string::String, Option<alloc::string::String>) {
+    if blob.len() < EXECVE_WIRE_HEADER_LEN {
+        return (
+            alloc::string::String::new(),
+            Some(alloc::format!(
+                "execve argv: blob len {} < header {}",
+                blob.len(),
+                EXECVE_WIRE_HEADER_LEN
+            )),
+        );
+    }
+    let hdr = unsafe { core::ptr::read_unaligned(blob.as_ptr().cast::<ExecveWireHeader>()) };
+    let max_payload = blob
+        .len()
+        .saturating_sub(EXECVE_WIRE_HEADER_LEN)
+        .min(EXECVE_ARG_BLOB_LEN);
+    let claimed_len = hdr.args_len as usize;
+    let n = claimed_len.min(max_payload);
+    let start = EXECVE_WIRE_HEADER_LEN;
+    let end = start.saturating_add(n).min(blob.len());
+    if end <= start {
+        return (
+            alloc::string::String::new(),
+            Some(alloc::format!(
+                "execve argv: header args_len={} produced empty payload slice (blob_len={})",
+                hdr.args_len,
+                blob.len()
+            )),
+        );
+    }
+    let data = &blob[start..end];
+    let slots = parse_execve_argv_from_payload(blob);
+    let mut primary = join_argv_segments(&slots);
+    let non_empty_slots = slots.iter().filter(|s| !s.is_empty()).count();
+    let split_join = join_execve_payload_by_nul_split(data);
+
+    let mut note: Option<alloc::string::String> = None;
+
+    if primary.is_empty() && !split_join.is_empty() {
+        primary = split_join;
+        note = Some(alloc::string::String::from(
+            "execve argv: header walk produced empty cmdline; used NUL-split fallback on argv blob",
+        ));
+    } else if !split_join.is_empty()
+        && split_join != primary
+        && split_join.len() > primary.len().saturating_add(8)
+    {
+        primary = split_join;
+        note = Some(alloc::string::String::from(
+            "execve argv: NUL-split join longer than header-guided join; using NUL-split result",
+        ));
+    }
+
+    if hdr.args_count > 0 && non_empty_slots < hdr.args_count as usize {
+        let msg = alloc::format!(
+            "execve argv: header args_count={} but only {} non-empty parsed slot(s) (args_len={})",
+            hdr.args_count,
+            non_empty_slots,
+            hdr.args_len
+        );
+        note = Some(match note {
+            Some(prev) => alloc::format!("{prev}; {msg}"),
+            None => msg,
+        });
+    }
+
+    (primary, note)
 }
 
 #[cfg(feature = "user")]
@@ -904,6 +1051,54 @@ mod tests {
             }
             let ev = MemoryEvent::from_bytes(&bytes).expect("execve ring sample");
             assert_eq!(ev.execve_cmdline, "a c");
+        }
+
+        /// Under-reported `args_count` vs NUL segments: NUL-split fallback must still recover cmdline.
+        #[test]
+        fn execve_argv_fallback_when_args_count_too_low() {
+            let mut payload = [0u8; RING_PAYLOAD_BLOB_LEN];
+            let argv = b"/bin/sh\0-c\0whoami\0";
+            let hdr = ExecveWireHeader {
+                pid: 2,
+                args_count: 1,
+                args_len: argv.len() as u32,
+                is_truncated: 0,
+            };
+            unsafe {
+                core::ptr::write_unaligned(payload.as_mut_ptr().cast(), hdr);
+            }
+            payload[EXECVE_WIRE_HEADER_LEN..EXECVE_WIRE_HEADER_LEN + argv.len()]
+                .copy_from_slice(argv);
+
+            let kernel = KernelMemoryEvent {
+                timestamp_ns: 1,
+                pid: 2,
+                tgid: 2,
+                syscall: 5,
+                args: [0, 0, 0, 0, 0, 0],
+                comm: [0; TASK_COMM_LEN],
+            };
+            let sample = RingBufferSample {
+                kernel,
+                syscall_ret: 0,
+                uid: 0,
+                _reserved: 0,
+                layout_version: RING_SAMPLE_LAYOUT_VERSION,
+                payload_blob: payload,
+            };
+            let mut bytes = [0u8; RingBufferSample::wire_size()];
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    (&sample as *const RingBufferSample).cast::<u8>(),
+                    bytes.as_mut_ptr(),
+                    bytes.len(),
+                );
+            }
+            let (ev, note) = MemoryEvent::from_bytes_detailed(&bytes);
+            let ev = ev.expect("parse");
+            assert_eq!(ev.execve_cmdline, "/bin/sh -c whoami");
+            let n = note.expect("expected parse note");
+            assert!(n.contains("NUL-split"), "unexpected note: {n}");
         }
 
         /// `openat` path decode must not panic when the ring payload is shorter than 64 bytes.

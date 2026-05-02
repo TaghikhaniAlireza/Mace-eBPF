@@ -164,16 +164,30 @@ pub async fn start_sensor(
 
             while let Some(item) = guard.get_inner_mut().next() {
                 let slice = item.as_ref();
-                let parsed = catch_unwind(AssertUnwindSafe(|| MemoryEvent::from_bytes(slice)));
+                let parsed =
+                    catch_unwind(AssertUnwindSafe(|| MemoryEvent::from_bytes_detailed(slice)));
                 match parsed {
-                    Ok(Some(event)) => {
+                    Ok((Some(event), note)) => {
+                        if let Some(msg) = note {
+                            warn!(
+                                "ring sample syscall={:?} tgid={} pid={} layout note: {}",
+                                event.event_type, event.tgid, event.pid, msg
+                            );
+                        }
                         if tx.send(event).await.is_err() {
                             return;
                         }
                     }
-                    Ok(None) => {
+                    Ok((None, Some(reason))) => {
                         warn!(
-                            "dropped malformed ring-buffer sample (len={}); parser returned None",
+                            "dropped ring-buffer sample (len={}): {}",
+                            slice.len(),
+                            reason
+                        );
+                    }
+                    Ok((None, None)) => {
+                        warn!(
+                            "dropped ring-buffer sample (len={}); parser returned None (no detail)",
                             slice.len()
                         );
                     }

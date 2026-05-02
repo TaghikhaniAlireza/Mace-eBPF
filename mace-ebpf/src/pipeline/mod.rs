@@ -10,7 +10,7 @@ use std::{
 use arc_swap::ArcSwap;
 use aya::Ebpf;
 use log::warn;
-use mace_ebpf_common::MemoryEvent;
+use mace_ebpf_common::{EventType, MemoryEvent};
 #[cfg(feature = "otel")]
 use opentelemetry::trace::Span;
 use parking_lot::Mutex;
@@ -409,6 +409,25 @@ fn route_partition_index(tgid: u32, partition_count: usize) -> usize {
     (tgid as usize) % partition_count.max(1)
 }
 
+/// When true, emit the per-event JSON callback. High-volume `mmap` / `openat` with no rule match
+/// are suppressed to reduce channel load; **`execve` / `execveat`** are always emitted.
+fn should_emit_standardized_json(
+    event: &EnrichedEvent,
+    enforce_matches: &[&crate::rules::Rule],
+    shadow_matches: &[&crate::rules::Rule],
+) -> bool {
+    if matches!(
+        event.inner.event_type,
+        EventType::Execve | EventType::Execveat
+    ) {
+        return true;
+    }
+    if !enforce_matches.is_empty() || !shadow_matches.is_empty() {
+        return true;
+    }
+    !matches!(event.inner.event_type, EventType::Mmap | EventType::Openat)
+}
+
 async fn run_partition_worker(
     mut rx: mpsc::Receiver<EnrichedEvent>,
     merge_tx: mpsc::Sender<EnrichedEvent>,
@@ -521,25 +540,27 @@ async fn run_partition_worker(
         }
 
         if let Some(cb) = &on_standardized_event {
-            let std_ev = build_standardized_event_from_rules(
-                &event,
-                &enforce_matches,
-                &shadow_matches,
-                if suppress_alerts {
-                    Some(suppressed_by.as_slice())
-                } else {
-                    None
-                },
-            );
-            match serde_json::to_string(&std_ev) {
-                Ok(json) => cb(json).await,
-                Err(e) => mace_log!(
-                    Info,
-                    "StandardizedEvent JSON serialization failed syscall={:?} tgid={} error={}",
-                    event.inner.event_type,
-                    event.inner.tgid,
-                    e
-                ),
+            if should_emit_standardized_json(&event, &enforce_matches, &shadow_matches) {
+                let std_ev = build_standardized_event_from_rules(
+                    &event,
+                    &enforce_matches,
+                    &shadow_matches,
+                    if suppress_alerts {
+                        Some(suppressed_by.as_slice())
+                    } else {
+                        None
+                    },
+                );
+                match serde_json::to_string(&std_ev) {
+                    Ok(json) => cb(json).await,
+                    Err(e) => mace_log!(
+                        Info,
+                        "StandardizedEvent JSON serialization failed syscall={:?} tgid={} error={}",
+                        event.inner.event_type,
+                        event.inner.tgid,
+                        e
+                    ),
+                }
             }
         }
 

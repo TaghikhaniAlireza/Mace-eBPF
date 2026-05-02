@@ -184,6 +184,14 @@ func runAgent(configPath string) error {
 }
 
 func logSecurityEvent(log *logrus.Logger, ev *mace.MaceEvent, format string) {
+	// Quiet default: only log high-signal syscalls or anything that matched a rule / shadow rule.
+	// Exec / execveat are always logged so operators retain a full command execution trail in the event file.
+	if len(ev.MatchedRules) == 0 && len(ev.ShadowMatchedRules) == 0 && !ev.Shadow {
+		switch ev.SyscallName {
+		case "mmap", "openat":
+			return
+		}
+	}
 	if format == "json" {
 		fields := logrus.Fields{
 			"kind":          "security_event",
