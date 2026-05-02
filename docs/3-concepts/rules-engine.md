@@ -118,7 +118,7 @@ Matching is case-insensitive for the syscall string.
 
 ## Command-line / argv context
 
-The kernel probe captures **`execve` argv at syscall entry** (ring layout **v11**): up to **16** arguments, each up to **128** bytes per `bpf_probe_read_user_str_bytes`, packed into a **400-byte** NUL-separated blob with an `ExecveWireHeader` (`args_count`, `args_len`, `is_truncated`). This removes the **TOCTOU** gap where userspace-only `/proc/<pid>/cmdline` reads could disagree with the syscall-time image.
+The kernel probe captures **`execve` argv at syscall entry** (ring layout **v12**): up to **8** arguments, each up to **96** bytes per `bpf_probe_read_user_str_bytes`, packed into a **288-byte** NUL-separated blob with an `ExecveWireHeader` (`args_count`, `args_len`, `is_truncated`). This removes the **TOCTOU** gap where userspace-only `/proc/<pid>/cmdline` reads could disagree with the syscall-time image.
 
 For matching, the engine still builds a **haystack** string in this order:
 

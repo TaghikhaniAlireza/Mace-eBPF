@@ -24,8 +24,9 @@ pub const SYSCALL_ARG_COUNT: usize = 6;
 /// Userspace may enrich from `/proc/<pid>/cmdline` if needed.
 /// v11: **execve** payload begins with [`ExecveWireHeader`] then up to [`EXECVE_ARG_BLOB_LEN`] bytes
 /// of **NUL-separated** argv strings captured at `sys_enter_execve` (TOCTOU-safe vs `/proc/cmdline`).
-/// Other syscalls still use the legacy scratch layout in `payload_blob` (openat prefix / memfd name).
-pub const RING_SAMPLE_LAYOUT_VERSION: u32 = 11;
+/// v12: **tighter argv caps** (fewer args / shorter per-arg read / smaller blob) to reduce verifier
+/// instruction complexity on strict kernels; bump `RING_SAMPLE_LAYOUT_VERSION` when wire changes.
+pub const RING_SAMPLE_LAYOUT_VERSION: u32 = 12;
 
 /// Max bytes for `openat` pathname snapshot in BPF (including NUL).
 pub const OPENAT_PATH_MAX_LEN: usize = 64;
@@ -33,10 +34,10 @@ pub const OPENAT_PATH_MAX_LEN: usize = 64;
 /// Max bytes for a single memfd name / legacy exec scratch slice in userspace decode paths.
 pub const EXECVE_SCRATCH_LEN: usize = 256;
 
-/// Max argv bytes packed after [`ExecveWireHeader`] inside `RingBufferSample::payload_blob` for execve (v11).
-pub const EXECVE_ARG_BLOB_LEN: usize = 400;
+/// Max argv bytes packed after [`ExecveWireHeader`] inside `RingBufferSample::payload_blob` for execve (v11+).
+pub const EXECVE_ARG_BLOB_LEN: usize = 288;
 
-/// Packed metadata written by eBPF at the start of the execve payload (v11).
+/// Packed metadata written by eBPF at the start of the execve payload (v11+).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ExecveWireHeader {
@@ -55,19 +56,19 @@ impl ExecveWireHeader {
     }
 }
 
-/// Retained for YAML/docs compatibility; eBPF captures up to [`EXECVE_MAX_ARGS_IN_BPF`] argv strings (v11).
+/// Retained for YAML/docs compatibility; eBPF captures up to [`EXECVE_MAX_ARGS_IN_BPF`] argv strings (v11+).
 pub const EXECVE_ARGV_MAX_ARGS: u32 = EXECVE_MAX_ARGS_IN_BPF;
 
-/// Maximum argv entries read in eBPF (verifier-bounded loop).
-pub const EXECVE_MAX_ARGS_IN_BPF: u32 = 16;
+/// Maximum argv entries read in eBPF (verifier-bounded loop; lower = smaller program).
+pub const EXECVE_MAX_ARGS_IN_BPF: u32 = 8;
 
 /// Max bytes read per argv string in one `bpf_probe_read_user_str_bytes` call (stack / insn tradeoff).
-pub const EXECVE_PER_ARG_READ_MAX: usize = 128;
+pub const EXECVE_PER_ARG_READ_MAX: usize = 96;
 
 /// Retained name: upper bound for single-string decode paths (memfd); not the full v11 exec blob.
 pub const EXECVE_ARG_STR_MAX: usize = EXECVE_SCRATCH_LEN;
 
-/// Wire header length for v11 execve (must match [`ExecveWireHeader::wire_size()`]).
+/// Wire header length for v11+ execve (must match [`ExecveWireHeader::wire_size()`]).
 pub const EXECVE_WIRE_HEADER_LEN: usize = ExecveWireHeader::wire_size();
 
 /// One shared byte buffer in the ring sample: v11 execve = header + argv blob; openat = path prefix; memfd = name.
@@ -91,7 +92,7 @@ pub struct RingBufferSample {
     pub uid: u32,
     pub _reserved: u32,
     pub layout_version: u32,
-    /// Execve (v11): [`ExecveWireHeader`] + NUL-separated argv; legacy v10: first [`EXECVE_SCRATCH_LEN`] as single string. Openat: first [`OPENAT_PATH_MAX_LEN`] bytes are the path.
+    /// Execve (v11+): [`ExecveWireHeader`] + NUL-separated argv; legacy v10: first [`EXECVE_SCRATCH_LEN`] as single string. Openat: first [`OPENAT_PATH_MAX_LEN`] bytes are the path.
     pub payload_blob: [u8; RING_PAYLOAD_BLOB_LEN],
 }
 
@@ -221,27 +222,26 @@ pub struct MemoryEvent {
 #[cfg(feature = "user")]
 impl MemoryEvent {
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        let (raw, syscall_ret, uid, payload_blob, layout_version) = if bytes.len()
-            == RingBufferSample::wire_size()
-        {
-            let sample =
-                unsafe { core::ptr::read_unaligned(bytes.as_ptr() as *const RingBufferSample) };
-            if sample.layout_version != 10 && sample.layout_version != RING_SAMPLE_LAYOUT_VERSION {
+        let (raw, syscall_ret, uid, payload_blob, layout_version) =
+            if bytes.len() == RingBufferSample::wire_size() {
+                let sample =
+                    unsafe { core::ptr::read_unaligned(bytes.as_ptr() as *const RingBufferSample) };
+                if sample.layout_version != 10 && sample.layout_version < 11 {
+                    return None;
+                }
+                (
+                    sample.kernel,
+                    sample.syscall_ret,
+                    sample.uid,
+                    Some(sample.payload_blob),
+                    sample.layout_version,
+                )
+            } else if bytes.len() == core::mem::size_of::<KernelMemoryEvent>() {
+                let raw = KernelMemoryEvent::from_bytes(bytes)?;
+                (raw, 0i64, 0u32, None, 0u32)
+            } else {
                 return None;
-            }
-            (
-                sample.kernel,
-                sample.syscall_ret,
-                sample.uid,
-                Some(sample.payload_blob),
-                sample.layout_version,
-            )
-        } else if bytes.len() == core::mem::size_of::<KernelMemoryEvent>() {
-            let raw = KernelMemoryEvent::from_bytes(bytes)?;
-            (raw, 0i64, 0u32, None, 0u32)
-        } else {
-            return None;
-        };
+            };
 
         let event_type = EventType::from_syscall(raw.syscall)?;
 

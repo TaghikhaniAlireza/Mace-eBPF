@@ -38,7 +38,7 @@ This document describes how the **Mace-eBPF** components fit together: kernel pr
 - **`#![no_std]`** eBPF programs under **`mace-ebpf-ebpf/src/`**.
 - Attached to **syscall tracepoints** (for example `sys_enter_mmap`, `sys_exit_mprotect`, … depending on configuration).
 - Uses **maps**: ring buffer for outbound events, LRU-style maps for pending syscall state, optional allowlists.
-- **Verifier constraints** drive design choices: `execve` packs **up to 16** argv strings at `sys_enter_execve` into a **bounded** ring payload (v11: header + 400-byte NUL-separated blob, with `is_truncated` when capped). Per-arg reads use a **PerCpuArray** scratch so the BPF stack stays under verifier limits; arguments beyond the buffer are not captured (no chunking in v1).
+- **Verifier constraints** drive design choices: `execve` packs **up to 8** argv strings at `sys_enter_execve` into a **bounded** ring payload (layout v12: header + 288-byte NUL-separated blob, **96** bytes max per `bpf_probe_read_user_str_bytes`, with `is_truncated` when capped). Per-arg reads use a **PerCpuArray** scratch so the BPF stack stays under verifier limits; arguments beyond the buffer are not captured (no chunking in v1). If `BPF_PROG_LOAD` returns **EACCES (13)** on attach, the program may be rejected by **kernel lockdown** or missing **`CAP_BPF`/`CAP_SYS_ADMIN`** — not necessarily argv logic.
 
 ## Where filtering and policy run
 
