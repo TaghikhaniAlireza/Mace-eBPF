@@ -135,6 +135,7 @@ fn capture_execve_argv_into_scratch(ctx: &TracePointContext, argv_ptr: u64) -> u
     };
     let temp = unsafe { &mut *temp_ptr };
     unsafe {
+        // Clear the full map value so any bytes past `read_cap` stay deterministic.
         core::ptr::write_bytes(temp.buf.as_mut_ptr(), 0u8, EXECVE_PER_ARG_READ_MAX);
     }
 
@@ -168,11 +169,13 @@ fn capture_execve_argv_into_scratch(ctx: &TracePointContext, argv_ptr: u64) -> u
             break;
         }
 
+        // Reserve one byte in `temp` so the kernel helper can always write a trailing NUL after
+        // a maximally long user string (63 content bytes + NUL). Passing the full 64-byte slice
+        // makes `bpf_probe_read_user_str` try to NUL-terminate at index 64, which is OOB for
+        // `ArgReadTemp::buf` and trips strict verifiers (`invalid access … off=208 size=1`).
+        let read_cap = EXECVE_PER_ARG_READ_MAX.saturating_sub(1);
         let n = match unsafe {
-            bpf_probe_read_user_str_bytes(
-                user_arg_ptr as *const u8,
-                &mut temp.buf[..EXECVE_PER_ARG_READ_MAX],
-            )
+            bpf_probe_read_user_str_bytes(user_arg_ptr as *const u8, &mut temp.buf[..read_cap])
         } {
             Ok(b) => b.len(),
             Err(_) => {
@@ -187,8 +190,9 @@ fn capture_execve_argv_into_scratch(ctx: &TracePointContext, argv_ptr: u64) -> u
             continue;
         }
 
-        // `bpf_probe_read_user_str_bytes` returns bytes **including** the terminating NUL.
-        let need = n;
+        // `bpf_probe_read_user_str_bytes` returns the string **without** the NUL; the helper
+        // wrote the terminator into `temp.buf[n]` within `read_cap` bytes.
+        let need = n.saturating_add(1);
         if write_off.saturating_add(need) > payload_cap {
             truncated = 1;
             break;

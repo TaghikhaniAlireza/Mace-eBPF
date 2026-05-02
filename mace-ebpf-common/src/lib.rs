@@ -65,6 +65,9 @@ pub const EXECVE_ARGV_MAX_ARGS: u32 = EXECVE_MAX_ARGS_IN_BPF;
 pub const EXECVE_MAX_ARGS_IN_BPF: u32 = 4;
 
 /// Max bytes read per argv string in one `bpf_probe_read_user_str_bytes` call (stack / insn tradeoff).
+/// The eBPF program passes `this - 1` as the destination length so the helper can always write a
+/// trailing NUL inside the per-CPU read buffer without an out-of-bounds store at index
+/// `EXECVE_PER_ARG_READ_MAX`.
 pub const EXECVE_PER_ARG_READ_MAX: usize = 64;
 
 /// Retained name: upper bound for single-string decode paths (memfd); not the full v11 exec blob.
@@ -301,7 +304,10 @@ impl MemoryEvent {
         let memfd_name = if event_type == EventType::MemfdCreate {
             payload_blob
                 .as_ref()
-                .map(|b| decode_execve_cmdline_blob(&b[..EXECVE_SCRATCH_LEN]))
+                .map(|b| {
+                    let n = EXECVE_SCRATCH_LEN.min(b.len());
+                    decode_execve_cmdline_blob(&b[..n])
+                })
                 .unwrap_or_default()
         } else {
             alloc::string::String::new()
