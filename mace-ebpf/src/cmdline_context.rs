@@ -29,7 +29,7 @@ impl CmdlineContextTracker {
 
         self.prune(ts);
 
-        if event.event_type == EventType::Execve {
+        if matches!(event.event_type, EventType::Execve | EventType::Execveat) {
             if !event.execve_cmdline.is_empty() {
                 self.map.insert(tgid, (event.execve_cmdline.clone(), ts));
                 return Some(event.execve_cmdline.clone());

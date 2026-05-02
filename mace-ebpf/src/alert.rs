@@ -106,6 +106,7 @@ fn syscall_name_for_event(event_type: EventType) -> &'static str {
         EventType::Ptrace => "ptrace",
         EventType::Execve => "execve",
         EventType::Openat => "openat",
+        EventType::Execveat => "execveat",
     }
 }
 
@@ -116,11 +117,14 @@ fn format_syscall_arguments(ev: &mace_ebpf_common::MemoryEvent) -> Vec<String> {
             format!("target_pid={}", ev.len),
             format!("data_ptr=0x{:x}", ev.addr),
         ],
-        EventType::Execve => {
+        EventType::Execve | EventType::Execveat => {
             let mut v = vec![
                 format!("filename_ptr=0x{:x}", ev.addr),
                 format!("argv_ptr=0x{:x}", ev.len),
             ];
+            if ev.event_type == EventType::Execveat {
+                v.push(format!("dirfd={}", ev.flags as i64));
+            }
             if !ev.execve_cmdline.is_empty() {
                 v.push(format!("argv_snapshot={}", ev.execve_cmdline));
             }
@@ -169,7 +173,8 @@ pub fn build_standardized_event(
     let username = ev.username.clone().unwrap_or_default();
 
     let execve_argv_truncated =
-        ev.inner.event_type == EventType::Execve && ev.inner.execve_argv_truncated;
+        matches!(ev.inner.event_type, EventType::Execve | EventType::Execveat)
+            && ev.inner.execve_argv_truncated;
 
     StandardizedEvent {
         timestamp: ev.inner.timestamp_ns,

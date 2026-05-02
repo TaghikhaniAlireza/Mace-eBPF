@@ -142,7 +142,9 @@ fn main() -> anyhow::Result<()> {
         .unwrap_or(false);
 
     if full_argv && (argv0_only || no_user_argv) {
-        println!("cargo:warning=MACE_EBPF_EXECVE_FULL_ARGV is set; ignoring argv0-only / no-user-argv flags");
+        println!(
+            "cargo:warning=MACE_EBPF_EXECVE_FULL_ARGV is set; ignoring argv0-only / no-user-argv flags"
+        );
     }
     if argv0_only && no_user_argv && !full_argv {
         println!(

@@ -459,7 +459,10 @@ pub(crate) fn evaluate_rule_conditions(
     }
 
     if !conditions.env_contains.is_empty() {
-        if event.inner.event_type != EventType::Execve {
+        if !matches!(
+            event.inner.event_type,
+            EventType::Execve | EventType::Execveat
+        ) {
             return false;
         }
         let Some(env) = read_proc_environ_flat(event.inner.tgid) else {
@@ -667,11 +670,11 @@ pub(crate) fn validate_conditions_structured(conditions: &Conditions) -> Result<
         let ok = conditions
             .syscall
             .as_deref()
-            .map(|s| s.eq_ignore_ascii_case("execve"))
+            .map(|s| s.eq_ignore_ascii_case("execve") || s.eq_ignore_ascii_case("execveat"))
             .unwrap_or(false);
         if !ok {
             return Err(RuleError::InvalidCondition(
-                "env_contains requires syscall: execve".into(),
+                "env_contains requires syscall: execve or execveat".into(),
             ));
         }
     }
@@ -843,13 +846,14 @@ fn event_syscall_name(event: &EnrichedEvent) -> &'static str {
         EventType::Ptrace => "ptrace",
         EventType::Execve => "execve",
         EventType::Openat => "openat",
+        EventType::Execveat => "execveat",
     }
 }
 
 fn is_supported_syscall(syscall: &str) -> bool {
     matches!(
         syscall.to_ascii_lowercase().as_str(),
-        "mmap" | "mprotect" | "memfd_create" | "ptrace" | "execve" | "openat"
+        "mmap" | "mprotect" | "memfd_create" | "ptrace" | "execve" | "execveat" | "openat"
     )
 }
 
@@ -1675,7 +1679,7 @@ rules:
         let err = RuleSet::from_yaml_str(yaml).expect_err("should reject");
         assert!(
             err.to_string()
-                .contains("env_contains requires syscall: execve"),
+                .contains("env_contains requires syscall: execve or execveat"),
             "unexpected err: {err}"
         );
     }
