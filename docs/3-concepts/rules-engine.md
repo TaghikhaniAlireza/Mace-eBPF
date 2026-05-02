@@ -118,7 +118,7 @@ Matching is case-insensitive for the syscall string.
 
 ## Command-line / argv context
 
-The kernel probe captures **`execve` argv at syscall entry** (ring layout **v13**): up to **4** arguments, each up to **64** bytes per `bpf_probe_read_user_str_bytes`, packed into a **192-byte** NUL-separated blob with an `ExecveWireHeader` (`args_count`, `args_len`, `is_truncated`). This removes the **TOCTOU** gap where userspace-only `/proc/<pid>/cmdline` reads could disagree with the syscall-time image.
+The kernel probe captures **`execve` argv at syscall entry** (ring layout **v13**): up to **4** arguments, each up to **63** bytes of string data per `bpf_probe_read_user_str_bytes` (64-byte temp, helper uses 63-byte destination so NUL fits), packed into a **192-byte** NUL-separated blob with an `ExecveWireHeader` (`args_count`, `args_len`, `is_truncated`). This removes the **TOCTOU** gap where userspace-only `/proc/<pid>/cmdline` reads could disagree with the syscall-time image.
 
 When **`execve_argv_truncated`** is true or the haystack is incomplete, rules that need **full** user text should rely on **`cmdline_contains_any`** / **`argv_contains`** (which consult the pipeline haystack: eBPF snapshot → **`cmdline_context`** → **`/proc/<pid>/cmdline`**) understanding that the `/proc` path is best-effort after exec for very long commands.
 
