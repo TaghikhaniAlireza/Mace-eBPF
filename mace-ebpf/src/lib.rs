@@ -3,6 +3,7 @@
 use std::{
     convert::TryFrom as _,
     fs,
+    panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
     process::Command,
     sync::{Arc, Once},
@@ -162,9 +163,25 @@ pub async fn start_sensor(
             };
 
             while let Some(item) = guard.get_inner_mut().next() {
-                if let Some(event) = MemoryEvent::from_bytes(item.as_ref()) {
-                    if tx.send(event).await.is_err() {
-                        return;
+                let slice = item.as_ref();
+                let parsed = catch_unwind(AssertUnwindSafe(|| MemoryEvent::from_bytes(slice)));
+                match parsed {
+                    Ok(Some(event)) => {
+                        if tx.send(event).await.is_err() {
+                            return;
+                        }
+                    }
+                    Ok(None) => {
+                        warn!(
+                            "dropped malformed ring-buffer sample (len={}); parser returned None",
+                            slice.len()
+                        );
+                    }
+                    Err(_) => {
+                        warn!(
+                            "dropped ring-buffer sample (len={}) after parse panic; continuing",
+                            slice.len()
+                        );
                     }
                 }
             }

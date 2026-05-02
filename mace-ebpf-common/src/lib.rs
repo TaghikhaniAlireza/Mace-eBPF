@@ -299,10 +299,8 @@ impl MemoryEvent {
             payload_blob
                 .as_ref()
                 .map(|b| {
-                    let path: &[u8; OPENAT_PATH_MAX_LEN] = b[..OPENAT_PATH_MAX_LEN]
-                        .try_into()
-                        .expect("RING_PAYLOAD_BLOB_LEN >= OPENAT_PATH_MAX_LEN");
-                    decode_openat_path_blob(path)
+                    let n = OPENAT_PATH_MAX_LEN.min(b.len());
+                    decode_openat_path_prefix(&b[..n])
                 })
                 .unwrap_or_default()
         } else {
@@ -346,9 +344,12 @@ fn decode_execve_cmdline_blob(blob: &[u8]) -> alloc::string::String {
     alloc::string::String::from_utf8_lossy(&blob[..end]).into_owned()
 }
 
-/// Parse v11 execve wire format: [`ExecveWireHeader`] followed by NUL-separated argv bytes.
-/// Returns a single space-joined command line (shell-style) for backward compatibility with
-/// [`MemoryEvent::execve_cmdline`], using [`String::from_utf8_lossy`] per segment.
+/// Parse v11 execve wire format: [`ExecveWireHeader`] followed by NUL-terminated argv slots.
+///
+/// Panic-safe: clamps `args_len` and `args_count` to wire limits, never indexes past `blob`,
+/// walks at most `min(args_count, EXECVE_MAX_ARGS_IN_BPF)` **argv slots** (NUL-delimited, last slot
+/// may omit a trailing NUL if `args_len` ends at slice end), and uses [`String::from_utf8_lossy`]
+/// per slot (including empty slots).
 #[cfg(feature = "user")]
 pub fn parse_execve_argv_from_payload(blob: &[u8]) -> alloc::vec::Vec<alloc::string::String> {
     if blob.len() < EXECVE_WIRE_HEADER_LEN {
@@ -359,32 +360,76 @@ pub fn parse_execve_argv_from_payload(blob: &[u8]) -> alloc::vec::Vec<alloc::str
         .len()
         .saturating_sub(EXECVE_WIRE_HEADER_LEN)
         .min(EXECVE_ARG_BLOB_LEN);
-    let n = (hdr.args_len as usize).min(max_payload);
+    let claimed_len = hdr.args_len as usize;
+    let n = claimed_len.min(max_payload);
     let start = EXECVE_WIRE_HEADER_LEN;
     let end = start.saturating_add(n).min(blob.len());
     if end <= start {
         return alloc::vec::Vec::new();
     }
     let data = &blob[start..end];
+    let max_args = (hdr.args_count as usize).min(EXECVE_MAX_ARGS_IN_BPF as usize);
+    if max_args == 0 {
+        return alloc::vec::Vec::new();
+    }
+
     let mut out = alloc::vec::Vec::new();
-    for seg in data.split(|b| *b == 0) {
-        if !seg.is_empty() {
-            out.push(alloc::string::String::from_utf8_lossy(seg).into_owned());
+    let mut pos = 0usize;
+    for _ in 0..max_args {
+        if pos > data.len() {
+            break;
+        }
+        let rel = data[pos..].iter().position(|&b| b == 0);
+        let seg_end = rel.map(|p| pos + p).unwrap_or(data.len());
+        let seg = &data[pos..seg_end];
+        out.push(alloc::string::String::from_utf8_lossy(seg).into_owned());
+        match rel {
+            Some(_) => pos = seg_end.saturating_add(1),
+            None => break,
         }
     }
     out
 }
 
+/// Upper bound for the joined `execve_cmdline` string to avoid unbounded allocation if the wire
+/// header is inconsistent with the blob.
+#[cfg(feature = "user")]
+const MAX_JOINED_EXECVE_CMDLINE_BYTES: usize = 16 * 1024;
+
 #[cfg(feature = "user")]
 fn parse_execve_argv_joined_from_payload(blob: &[u8]) -> alloc::string::String {
     let v = parse_execve_argv_from_payload(blob);
-    v.join(" ")
+    let mut s = alloc::string::String::new();
+    for part in &v {
+        if s.len() >= MAX_JOINED_EXECVE_CMDLINE_BYTES {
+            break;
+        }
+        if part.is_empty() {
+            continue;
+        }
+        if !s.is_empty() {
+            if s.len() >= MAX_JOINED_EXECVE_CMDLINE_BYTES {
+                break;
+            }
+            s.push(' ');
+        }
+        let room = MAX_JOINED_EXECVE_CMDLINE_BYTES.saturating_sub(s.len());
+        if part.len() <= room {
+            s.push_str(part);
+        } else if room > 0 {
+            let cut = part.floor_char_boundary(room);
+            s.push_str(&part[..cut]);
+            break;
+        } else {
+            break;
+        }
+    }
+    s
 }
 
 #[cfg(feature = "user")]
-fn decode_openat_path_blob(blob: &[u8; OPENAT_PATH_MAX_LEN]) -> alloc::string::String {
-    let end = blob.iter().position(|&b| b == 0).unwrap_or(blob.len());
-    alloc::string::String::from_utf8_lossy(&blob[..end]).into_owned()
+fn decode_openat_path_prefix(prefix: &[u8]) -> alloc::string::String {
+    decode_execve_cmdline_blob(prefix)
 }
 
 // ---------------------------------------------------------------------------
@@ -810,6 +855,88 @@ mod tests {
             assert!(ev.execve_cmdline.ends_with("Z_END_MARK_9"));
             assert_eq!(ev.execve_cmdline.len(), arg_len);
             assert!(ev.execve_argv_truncated);
+        }
+
+        /// Empty argv slot between two non-empty args: `args_count` must yield three segments.
+        #[test]
+        fn parse_execve_argv_respects_args_count_with_empty_middle() {
+            let mut blob = [0u8; EXECVE_WIRE_HEADER_LEN + EXECVE_ARG_BLOB_LEN];
+            let argv = b"a\0\0c\0";
+            let hdr = ExecveWireHeader {
+                pid: 1,
+                args_count: 3,
+                args_len: argv.len() as u32,
+                is_truncated: 0,
+            };
+            unsafe {
+                core::ptr::write_unaligned(blob.as_mut_ptr().cast(), hdr);
+            }
+            blob[EXECVE_WIRE_HEADER_LEN..EXECVE_WIRE_HEADER_LEN + argv.len()].copy_from_slice(argv);
+            let v = parse_execve_argv_from_payload(&blob);
+            assert_eq!(v.len(), 3);
+            assert_eq!(v[0], "a");
+            assert_eq!(v[1], "");
+            assert_eq!(v[2], "c");
+
+            let kernel = KernelMemoryEvent {
+                timestamp_ns: 1,
+                pid: 1,
+                tgid: 1,
+                syscall: 5,
+                args: [0, 0, 0, 0, 0, 0],
+                comm: [0; TASK_COMM_LEN],
+            };
+            let sample = RingBufferSample {
+                kernel,
+                syscall_ret: 0,
+                uid: 0,
+                _reserved: 0,
+                layout_version: RING_SAMPLE_LAYOUT_VERSION,
+                payload_blob: blob,
+            };
+            let mut bytes = [0u8; RingBufferSample::wire_size()];
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    (&sample as *const RingBufferSample).cast::<u8>(),
+                    bytes.as_mut_ptr(),
+                    bytes.len(),
+                );
+            }
+            let ev = MemoryEvent::from_bytes(&bytes).expect("execve ring sample");
+            assert_eq!(ev.execve_cmdline, "a c");
+        }
+
+        /// `openat` path decode must not panic when the ring payload is shorter than 64 bytes.
+        #[test]
+        fn memory_event_openat_short_payload_no_panic() {
+            let mut payload = [0u8; RING_PAYLOAD_BLOB_LEN];
+            payload[..12].copy_from_slice(b"/etc/passwd\0");
+            let kernel = KernelMemoryEvent {
+                timestamp_ns: 1,
+                pid: 1,
+                tgid: 1,
+                syscall: 6,
+                args: [0, 0x1000, 0, 0, 0, 0],
+                comm: [0; TASK_COMM_LEN],
+            };
+            let sample = RingBufferSample {
+                kernel,
+                syscall_ret: 0,
+                uid: 0,
+                _reserved: 0,
+                layout_version: RING_SAMPLE_LAYOUT_VERSION,
+                payload_blob: payload,
+            };
+            let mut bytes = [0u8; RingBufferSample::wire_size()];
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    (&sample as *const RingBufferSample).cast::<u8>(),
+                    bytes.as_mut_ptr(),
+                    bytes.len(),
+                );
+            }
+            let ev = MemoryEvent::from_bytes(&bytes).expect("openat ring sample");
+            assert_eq!(ev.openat_path, "/etc/passwd");
         }
 
         /// Validates parsing of an all-zero raw kernel event for syscall id 1 (mmap with zero fields).
