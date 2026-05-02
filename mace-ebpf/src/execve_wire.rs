@@ -3,7 +3,7 @@
 
 pub use mace_ebpf_common::parse_execve_argv_from_payload;
 
-/// Split the v11 execve payload (header + argv blob) into lossy UTF-8 [`String`] segments.
+/// Split the v11+ execve payload (header + argv blob) into lossy UTF-8 [`String`] segments.
 #[must_use]
 pub fn parse_execve_argv_strings(blob: &[u8]) -> Vec<String> {
     parse_execve_argv_from_payload(blob)
