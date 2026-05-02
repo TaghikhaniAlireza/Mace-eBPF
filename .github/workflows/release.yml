@@ -24,6 +24,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   NFPM_VERSION: "2.41.2"
+  MACE_EBPF_EXECVE_FULL_ARGV: "1"
 
 jobs:
   release:

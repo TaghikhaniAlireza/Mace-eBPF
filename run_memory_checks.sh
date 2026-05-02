@@ -9,7 +9,7 @@ rustup component add miri llvm-tools-preview --toolchain nightly-x86_64-unknown-
   rustup component add miri llvm-tools-preview --toolchain nightly
 
 echo "==> One normal build of mace-ebpf (produces target/*/build/mace-ebpf-*/out/mace-ebpf for Miri/ASAN build.rs)"
-cargo build -p mace-ebpf
+MACE_EBPF_EXECVE_FULL_ARGV=1 cargo build -p mace-ebpf
 
 echo "==> cargo +nightly miri setup"
 cargo +nightly miri setup

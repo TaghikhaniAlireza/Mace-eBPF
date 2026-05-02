@@ -20,6 +20,12 @@
 - **`bpf-linker`** must be installed (`cargo install bpf-linker`).
 - The nightly toolchain is used by the build script to compile the eBPF program with `-Z build-std`.
 
+### eBPF `execve` argv build policy (`mace-ebpf/build.rs`)
+
+- **Default** (`cargo build -p mace-ebpf`, `make build-agent`): compiles **`execve_no_user_argv`** so `sys_enter_execve` **does not** read user argv in BPF (verifier-friendly). Execve rules still work via **`/proc/<tgid>/cmdline`** in userspace.
+- **Full kernel argv** (when your kernel accepts it): `MACE_EBPF_EXECVE_FULL_ARGV=1 cargo build -p mace-ebpf` or `make rust-build-ebpf-full-argv` / `make build-agent-ebpf-full-argv`.
+- **Explicit argv0-only**: `MACE_EBPF_EXECVE_ARGV0_ONLY=1` (see Makefile `rust-build-ebpf-argv0`).
+
 ### Build / Check / Test / Lint
 
 Standard commands (see `README.md` for full details):
