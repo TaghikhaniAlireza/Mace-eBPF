@@ -32,7 +32,7 @@ Standard commands (see `README.md` for full details):
 
 - **Build:** `cargo build --release` (also builds the eBPF program via build script)
 - **Check:** `cargo check`
-- **Test:** `cargo test` (no automated tests currently exist beyond empty test harnesses)
+- **Test:** `cargo test` (24 unit tests for event parsing, syscall mapping, etc.)
 - **Lint:** `cargo clippy --all-targets`
 - **Format:** `cargo +nightly fmt --check` (must use nightly — `rustfmt.toml` uses unstable features like `imports_granularity` and `group_imports`)
 
@@ -48,4 +48,15 @@ sudo RUST_LOG=info ./target/release/mace-ebpf
 
 ### Cloud VM limitation
 
-The Cursor Cloud VM runs inside a Firecracker microVM whose kernel does not expose full eBPF tracepoint support. The binary **builds successfully** but fails at runtime with `BPF_PROG_LOAD syscall returned Invalid argument (os error 22)`. This is a kernel environment limitation, not a code bug. Build, check, test, clippy, and fmt all work correctly.
+The Cursor Cloud VM runs inside a Firecracker microVM whose kernel does not expose full eBPF tracepoint support. The binary **builds successfully** but fails at runtime (`unexpected kernel release format: 6.1.147` or `BPF_PROG_LOAD syscall returned Invalid argument (os error 22)` depending on kernel). This is a kernel environment limitation, not a code bug. Build, check, test, clippy, and fmt all work correctly.
+
+### Testing the rule engine without eBPF
+
+Use `mace-replay` to exercise the rule engine offline:
+
+```bash
+cargo build -p mace-replay
+./target/debug/mace-replay replay --data <events.json> --rules packaging/rules.yaml
+```
+
+The JSON file should contain an array of `MemoryEvent` objects (see `mace-ebpf-common` for the schema). This works in the Cloud VM since it does not require kernel eBPF.
