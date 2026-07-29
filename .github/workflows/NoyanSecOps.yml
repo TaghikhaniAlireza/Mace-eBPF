@@ -1,4 +1,5 @@
 name: NoyanSecOps
+
 on: [workflow_dispatch, push]
 
 permissions:
@@ -9,12 +10,16 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+
     steps:
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Run NoyanSecOps
-        uses: TaghikhaniAlireza/NoyanSecOps@v0.2.0
+        uses: TaghikhaniAlireza/NoyanSecOps@v0.2.1
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          fail_policy: false
+          severity: CRITICAL,HIGH
